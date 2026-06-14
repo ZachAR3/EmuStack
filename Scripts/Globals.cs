@@ -2,7 +2,7 @@ using Godot;
 using System.IO;
 using System.Linq;
 using Octokit;
-using YuzuToolbox.Scripts.Modes;
+using EmuStack.Scripts.Modes;
 using Node = Godot.Node;
 
 public partial class Globals : Node
@@ -10,12 +10,12 @@ public partial class Globals : Node
 	//private static Globals _instance;
 	public static Globals Instance;
 
-	public Mode AppMode = new ModeRyujinx();
+	public ProviderRegistry ProviderRegistry = new();
+	public Mode AppMode;
 	public ResourceSaveManager SaveManager = new();
 	public SettingsResource Settings = new();
 	
-	// TODO replace header with finalized project name
-	public readonly GitHubClient LocalGithubClient = new(new ProductHeaderValue("EmulationToolbox"));
+	public readonly GitHubClient LocalGithubClient = new(new ProductHeaderValue("EmuStack"));
 	//public string DllsDirectory;
 
 	public override void _Ready()
@@ -23,6 +23,8 @@ public partial class Globals : Node
 		Instance = this;
 		SaveManager.Version = 2.4f;
 		Settings = SaveManager.GetSettings();
+		SetAppMode(Settings.AppMode, false);
+		MigrateLegacySettings();
 		SetDefaultPaths();
 		if (!string.IsNullOrEmpty(Settings.GithubApiToken))
 		{
@@ -39,26 +41,49 @@ public partial class Globals : Node
 
 	public void SetDefaultPaths()
 	{
-		// Sets app data path default for first startup
-		if (string.IsNullOrEmpty(Settings.AppDataPath))
+		foreach (var provider in ProviderRegistry.Providers)
 		{
-			Settings.AppDataPath = OS.GetName() == "Linux"
-				? Path.Join(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
-					"yuzu")
-				: Path.Join(System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData),
-					"yuzu");
+			ApplyProviderDefaults(provider, Settings.GetProviderSettings(provider.Id));
 		}
 
-		if (string.IsNullOrEmpty(Settings.ModsLocation))
-		{
-			Settings.ModsLocation = Path.Join(Settings.AppDataPath, "load");
-		}
+		SyncLegacySettings(CurrentProviderSettings);
+		SaveManager.WriteSave(Settings);
+	}
 
-		if (string.IsNullOrEmpty(Settings.FromSaveDirectory))
-		{
-			Settings.FromSaveDirectory = Path.Join(Settings.AppDataPath, "nand", "user", "save");
-		}
 
+	public ProviderSettingsResource CurrentProviderSettings => Settings.GetProviderSettings(AppMode.Id);
+
+
+	public void SetAppMode(string providerId, bool persist = true)
+	{
+		AppMode = ProviderRegistry.Get(providerId);
+		Settings.AppMode = AppMode.Id;
+		ApplyProviderDefaults(AppMode, CurrentProviderSettings);
+		SyncLegacySettings(CurrentProviderSettings);
+		if (persist)
+		{
+			SaveManager.WriteSave(Settings);
+		}
+	}
+
+
+	public void SyncLegacySettings(ProviderSettingsResource providerSettings)
+	{
+		Settings.SaveDirectory = providerSettings.SaveDirectory;
+		Settings.ExecutablePath = providerSettings.ExecutablePath;
+		Settings.FromSaveDirectory = providerSettings.FromSaveDirectory;
+		Settings.ToSaveDirectory = providerSettings.ToSaveDirectory;
+		Settings.ModsLocation = providerSettings.ModsLocation;
+		Settings.AppDataPath = providerSettings.AppDataPath;
+		Settings.InstalledVersion = Tools.TryToVersionInt(providerSettings.InstalledVersion, out var legacyVersion)
+			? legacyVersion
+			: -1;
+	}
+
+
+	public void SyncCurrentProviderSettings()
+	{
+		SyncLegacySettings(CurrentProviderSettings);
 		SaveManager.WriteSave(Settings);
 	}
 
@@ -66,6 +91,70 @@ public partial class Globals : Node
 	public void AuthenticateGithubClient()
 	{
 		LocalGithubClient.Credentials = new Credentials(Settings.GithubApiToken);
+	}
+
+
+	private void MigrateLegacySettings()
+	{
+		var providerSettings = CurrentProviderSettings;
+		if (!string.IsNullOrEmpty(providerSettings.SaveDirectory) ||
+		    !string.IsNullOrEmpty(providerSettings.ExecutablePath) ||
+		    !string.IsNullOrEmpty(providerSettings.AppDataPath))
+		{
+			return;
+		}
+
+		providerSettings.SaveDirectory = Settings.SaveDirectory ?? "";
+		providerSettings.ExecutablePath = Settings.ExecutablePath ?? "";
+		providerSettings.AppDataPath = Settings.AppDataPath ?? "";
+		providerSettings.ModsLocation = Settings.ModsLocation ?? "";
+		providerSettings.FromSaveDirectory = Settings.FromSaveDirectory ?? "";
+		providerSettings.ToSaveDirectory = Settings.ToSaveDirectory ?? "";
+		providerSettings.InstalledVersion = Settings.InstalledVersion >= 0
+			? GetLegacyVersionString(Settings.InstalledVersion, AppMode)
+			: "";
+	}
+
+
+	private void ApplyProviderDefaults(Mode provider, ProviderSettingsResource providerSettings)
+	{
+		var osName = OS.GetName();
+
+		if (string.IsNullOrEmpty(providerSettings.ReleaseChannel))
+		{
+			providerSettings.ReleaseChannel = provider.DefaultReleaseChannel;
+		}
+
+		if (string.IsNullOrEmpty(providerSettings.ExecutableName))
+		{
+			providerSettings.ExecutableName = provider.DefaultExecutableName;
+		}
+
+		if (string.IsNullOrEmpty(providerSettings.SaveDirectory))
+		{
+			providerSettings.SaveDirectory = provider.GetDefaultInstallDirectory(osName);
+		}
+
+		if (string.IsNullOrEmpty(providerSettings.AppDataPath))
+		{
+			providerSettings.AppDataPath = provider.GetDefaultAppDataPath(osName);
+		}
+
+		if (string.IsNullOrEmpty(providerSettings.ModsLocation))
+		{
+			providerSettings.ModsLocation = provider.GetDefaultModsLocation(providerSettings.AppDataPath);
+		}
+
+		if (string.IsNullOrEmpty(providerSettings.FromSaveDirectory))
+		{
+			providerSettings.FromSaveDirectory = provider.GetDefaultSavesLocation(providerSettings.AppDataPath);
+		}
+	}
+
+
+	private static string GetLegacyVersionString(int installedVersion, Mode provider)
+	{
+		return provider.Id == "yuzu" ? installedVersion.ToString() : Tools.FromInt(installedVersion);
 	}
 
 }

@@ -17,8 +17,8 @@ public partial class ToolsPage : Control
 	// Godot Functions
 	private void Initiate()
 	{
-		_fromSaveDirectoryButton.Text = Globals.Instance.Settings.FromSaveDirectory;
-		_toSaveDirectoryButton.Text = Globals.Instance.Settings.ToSaveDirectory;
+		_fromSaveDirectoryButton.Text = Globals.Instance.CurrentProviderSettings.FromSaveDirectory;
+		_toSaveDirectoryButton.Text = Globals.Instance.CurrentProviderSettings.ToSaveDirectory;
 	}
 	
 	
@@ -32,7 +32,7 @@ public partial class ToolsPage : Control
 		}
 		
 		// Clears the install folder, if failed notifies user
-		if (!Tools.Instance.ClearInstallationFolder(Globals.Instance.Settings.SaveDirectory))
+		if (!Tools.Instance.ClearInstallationFolder(Globals.Instance.CurrentProviderSettings.SaveDirectory))
 		{
 			Tools.Instance.AddError("failed to clear installation folder");
 			_clearInstallFolderButton.Text = "Clear failed!";
@@ -48,13 +48,15 @@ public partial class ToolsPage : Control
 	{
 		try
 		{
-			Tools.Instance.DuplicateDirectoryContents(Globals.Instance.Settings.FromSaveDirectory, Globals.Instance.Settings.ToSaveDirectory, true);
+			Tools.Instance.DuplicateDirectoryContents(
+				Globals.Instance.CurrentProviderSettings.FromSaveDirectory,
+				Globals.Instance.CurrentProviderSettings.ToSaveDirectory,
+				true);
 			_backupSavesButton.Text = "Backup successful!";
 		}
 		catch (Exception backupError)
 		{ 
 			Tools.Instance.AddError("failed to create save backup exception:" + backupError);
-			throw;
 		}
 
 	}
@@ -64,39 +66,41 @@ public partial class ToolsPage : Control
 	{
 		try
 		{
-			Tools.Instance.DuplicateDirectoryContents(Globals.Instance.Settings.ToSaveDirectory, Globals.Instance.Settings.FromSaveDirectory, true);
+			Tools.Instance.DuplicateDirectoryContents(
+				Globals.Instance.CurrentProviderSettings.ToSaveDirectory,
+				Globals.Instance.CurrentProviderSettings.FromSaveDirectory,
+				true);
 			_restoreSavesButton.Text = "Saves restored successfully!";
 		}
 		catch (Exception restoreError)
 		{
 			Tools.Instance.AddError("failed to restore saves, exception: " + restoreError);
-			throw;
 		}
 	}
 	
 	
 	private void OnFromSaveDirectoryButtonPressed()
 	{
-		var fromSaveDirectoryInput = Dialog.FolderPicker(Globals.Instance.Settings.FromSaveDirectory).Path;
+		var fromSaveDirectoryInput = Dialog.FolderPicker(Globals.Instance.CurrentProviderSettings.FromSaveDirectory).Path;
 		if (fromSaveDirectoryInput != null)
 		{
-			Globals.Instance.Settings.FromSaveDirectory = fromSaveDirectoryInput;
+			Globals.Instance.CurrentProviderSettings.FromSaveDirectory = fromSaveDirectoryInput;
 		}
 
-		_fromSaveDirectoryButton.Text = Globals.Instance.Settings.FromSaveDirectory;
-		Globals.Instance.SaveManager.WriteSave(Globals.Instance.Settings);
+		_fromSaveDirectoryButton.Text = Globals.Instance.CurrentProviderSettings.FromSaveDirectory;
+		Globals.Instance.SyncCurrentProviderSettings();
 	}
 	
 	private void OnToSaveDirectoryButtonPressed()
 	{
-		var toSaveDirectoryInput = Dialog.FolderPicker(Globals.Instance.Settings.ToSaveDirectory).Path;
+		var toSaveDirectoryInput = Dialog.FolderPicker(Globals.Instance.CurrentProviderSettings.ToSaveDirectory).Path;
 		if (toSaveDirectoryInput != null)
 		{
-			Globals.Instance.Settings.ToSaveDirectory = toSaveDirectoryInput;
+			Globals.Instance.CurrentProviderSettings.ToSaveDirectory = toSaveDirectoryInput;
 		}
 
-		_toSaveDirectoryButton.Text = Globals.Instance.Settings.ToSaveDirectory;
-		Globals.Instance.SaveManager.WriteSave(Globals.Instance.Settings);
+		_toSaveDirectoryButton.Text = Globals.Instance.CurrentProviderSettings.ToSaveDirectory;
+		Globals.Instance.SyncCurrentProviderSettings();
 	}
 
 

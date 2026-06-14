@@ -26,6 +26,7 @@ public partial class SettingsPage : Node
 			return;
 		}
 		Globals.Instance.Settings = new SettingsResource();
+		Globals.Instance.SetAppMode(Globals.Instance.Settings.AppMode, false);
 		Globals.Instance.SetDefaultPaths();
 	}
 
@@ -65,4 +66,3 @@ public partial class SettingsPage : Node
 		Globals.Instance.SaveManager.WriteSave();
 	}
 }
-

@@ -39,7 +39,7 @@ border_width_right = 3
 border_width_bottom = 3
 border_color = Color(0.8, 0.8, 0.8, 0)
 
-[node name="Home" type="Control" node_paths=PackedStringArray("_darkBg", "_lightBg", "_downloadWindowApp", "_enableLightTheme", "_header", "_headerLabel", "_latestVersionLabel", "_errorConsole", "_modList", "_modMangerLoadingSprite", "_modManagerLoadingLabel") groups=["Initiate"]]
+[node name="Home" type="Control" node_paths=PackedStringArray("_appModesButton", "_darkBg", "_lightBg", "_downloadWindowApp", "_enableLightTheme", "_header", "_headerLabel", "_latestVersionLabel", "_errorConsole", "_modList", "_modMangerLoadingSprite", "_modManagerLoadingLabel") groups=["Initiate"]]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -51,10 +51,7 @@ size_flags_vertical = 4
 theme = ExtResource("1_c22a4")
 script = ExtResource("1_p51ic")
 _appVersion = 3.5
-_appModes = {
-0: "Yuzu",
-1: "Ryujinx"
-}
+_appModesButton = NodePath("Header/Option/OptionButton")
 _darkBg = NodePath("DarkBG")
 _lightBg = NodePath("LightBG")
 _downloadWindowApp = NodePath("Pages/Installer/DownloadWindow/Window")
@@ -127,7 +124,7 @@ metadata/_edit_group_ = true
 [node name="HeaderLabel" type="Label" parent="Header/HeaderLabels"]
 layout_mode = 2
 theme_override_font_sizes/font_size = 49
-text = "YuzuToolbox"
+text = "EmuStack"
 vertical_alignment = 3
 
 [node name="VSeparator" type="VSeparator" parent="Header/HeaderLabels"]
@@ -155,12 +152,14 @@ metadata/_edit_use_anchors_ = true
 
 [node name="OptionButton" type="OptionButton" parent="Header/Option"]
 layout_mode = 2
-item_count = 2
+item_count = 3
 selected = 1
-popup/item_0/text = "Yuzu"
+popup/item_0/text = "Eden"
 popup/item_0/id = 0
-popup/item_1/text = "Ryujinx"
+popup/item_1/text = "Ryubing"
 popup/item_1/id = 1
+popup/item_2/text = "Yuzu"
+popup/item_2/id = 2
 
 [node name="LightMode" type="CheckButton" parent="Header/Option"]
 layout_mode = 2

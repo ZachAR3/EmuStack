@@ -2,7 +2,6 @@ using System.Collections.Generic;
 using System.Linq;
 using Godot;
 using Godot.Collections;
-using YuzuToolbox.Scripts.Modes;
 
 
 public partial class Home : Control
@@ -10,7 +9,6 @@ public partial class Home : Control
 	[ExportGroup("App")]
 	[Export()] private float _appVersion = 2f;
 	[Export()] private OptionButton _appModesButton;
-	[Export()] private Godot.Collections.Dictionary<int, string> _appModes;
 	[Export()] private TextureRect _darkBg;
 	[Export()] private TextureRect _lightBg;
 	[Export()] private ColorRect _downloadWindowApp;
@@ -32,6 +30,7 @@ public partial class Home : Control
 
 	// Internal variables
 	private Theme _currentTheme;
+	private System.Collections.Generic.Dictionary<int, string> _providerIds = new();
 	private SettingsResource Settings => Globals.Instance.Settings;
 
 
@@ -44,6 +43,7 @@ public partial class Home : Control
 
 		// Set the theme
 		SetTheme(Settings.LightModeEnabled);
+		PopulateModes();
 		SetMode(0, Settings.AppMode);
 
 		// Sets scaling (Called manually to hopefully fix #31
@@ -69,29 +69,44 @@ public partial class Home : Control
 	}
 
 
+	private void PopulateModes()
+	{
+		_appModesButton.Clear();
+		_providerIds.Clear();
+
+		for (var providerIndex = 0; providerIndex < Globals.Instance.ProviderRegistry.Providers.Count; providerIndex++)
+		{
+			var provider = Globals.Instance.ProviderRegistry.Providers[providerIndex];
+			_appModesButton.AddItem(provider.Name, providerIndex);
+			_appModesButton.SetItemMetadata(providerIndex, provider.Id);
+			_providerIds[providerIndex] = provider.Id;
+		}
+	}
+
+
 	private void SetMode(int newMode, string forcedMode = "")
 	{
-		string mode;
+		string providerId;
 		// if manually setting a mode set it to that, otherwise for the button event updates use the indexed mode given
 		if (forcedMode != "")
 		{
-			mode = forcedMode;
-			// TODO
-			//_appModesButton.Selected = _appModes != null ? _appModes.FirstOrDefault(x => x.Value == forcedMode).Key : 0;
+			providerId = Globals.Instance.ProviderRegistry.NormalizeProviderId(forcedMode);
 		}
 		else
 		{
-			mode = _appModes[newMode];
+			providerId = _providerIds.TryGetValue(newMode, out var selectedProviderId)
+				? selectedProviderId
+				: Globals.Instance.ProviderRegistry.DefaultProvider.Id;
 		}
-		
-		switch (mode)
+
+		Globals.Instance.SetAppMode(providerId);
+		for (var itemIndex = 0; itemIndex < _appModesButton.ItemCount; itemIndex++)
 		{
-			case "Yuzu":
-				Globals.Instance.AppMode = new ModeYuzu();
-				break;
-			case "Ryujinx":
-				Globals.Instance.AppMode = new ModeRyujinx();
-				break;
+			if (_appModesButton.GetItemMetadata(itemIndex).AsString() == Globals.Instance.AppMode.Id)
+			{
+				_appModesButton.Selected = itemIndex;
+				return;
+			}
 		}
 	}
 
@@ -127,4 +142,3 @@ public partial class Home : Control
 	}
 
 }
-

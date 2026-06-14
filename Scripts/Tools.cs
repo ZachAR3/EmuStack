@@ -2,6 +2,7 @@ using Godot;
 using System;
 using System.IO;
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using ContentType = Octokit.ContentType;
 using HttpClient = System.Net.Http.HttpClient;
@@ -36,38 +37,66 @@ public partial class Tools : Node
 
 
 	// General functions
-	public void LaunchYuzu()
+	public void LaunchEmulator()
 	{
-		string executablePath = Globals.Instance.Settings.ExecutablePath;
+		string executablePath = Globals.Instance.CurrentProviderSettings.ExecutablePath;
+		string emulatorName = Globals.Instance.AppMode.Name;
 
 		try
 		{
-			ProcessStartInfo yuzuProcessInfo = new(executablePath);
+			ProcessStartInfo emulatorProcessInfo = new(executablePath);
 
-			Process yuzuProcess = Process.Start(yuzuProcessInfo);
+			Process.Start(emulatorProcessInfo);
 			GetTree().Quit();
 		}
 		catch (Exception launchException)
 		{
-			AddError("Unable to launch Yuzu: " + launchException.Message);
+			AddError($"Unable to launch {emulatorName}: " + launchException.Message);
 		}	
 	}
 
-	
 	// Bit math I don't understand to convert to and from an int for indexing
 	public static int ToInt(string version)
 	{
-		// Override of sorts so this function can be used on both ints and strings
-		if (int.TryParse(version, out _))
+		if (TryToVersionInt(version, out var versionInt))
 		{
-			return version.ToInt();
+			return versionInt;
 		}
-		
-		string[] versionParts = version.Split('.');
-		int major = int.Parse(versionParts[0]);
-		int minor = int.Parse(versionParts[1]);
-		int build = int.Parse(versionParts[2]);
-		return (major << 22) | (minor << 12) | build;
+
+		throw new FormatException($"Invalid version number: {version}");
+	}
+
+
+	public static bool TryToVersionInt(string version, out int versionInt)
+	{
+		versionInt = -1;
+		if (string.IsNullOrWhiteSpace(version))
+		{
+			return false;
+		}
+
+		// Override of sorts so this function can be used on both ints and strings
+		if (int.TryParse(version, out versionInt))
+		{
+			return true;
+		}
+
+		var semanticVersion = Regex.Match(version.Trim().TrimStart('v'), @"^\d+\.\d+\.\d+");
+		if (!semanticVersion.Success)
+		{
+			return false;
+		}
+
+		string[] versionParts = semanticVersion.Value.Split('.');
+		if (!int.TryParse(versionParts[0], out var major) ||
+		    !int.TryParse(versionParts[1], out var minor) ||
+		    !int.TryParse(versionParts[2], out var build))
+		{
+			return false;
+		}
+
+		versionInt = (major << 22) | (minor << 12) | build;
+		return true;
 	}
 
 
@@ -108,6 +137,18 @@ public partial class Tools : Node
 	
 	public static bool DeleteDirectoryContents(string directoryPath)
 	{
+		if (string.IsNullOrWhiteSpace(directoryPath) || !Directory.Exists(directoryPath))
+		{
+			return false;
+		}
+
+		var fullPath = Path.GetFullPath(directoryPath);
+		var rootPath = Path.GetPathRoot(fullPath);
+		if (fullPath == rootPath || fullPath == System.Environment.GetFolderPath(System.Environment.SpecialFolder.UserProfile))
+		{
+			return false;
+		}
+
 		// Delete all files within the directory
 		string[] files = Directory.GetFiles(directoryPath);
 		foreach (string file in files)
@@ -130,6 +171,11 @@ public partial class Tools : Node
 	
 	public static void MoveFilesAndDirs(string sourceDirectory, string targetDirectory)
 	{
+		if (!Directory.Exists(sourceDirectory))
+		{
+			return;
+		}
+
 		// Create the target directory if it doesn't exist
 		if (!Directory.Exists(targetDirectory) && !string.IsNullOrEmpty(targetDirectory))
 		{
@@ -169,6 +215,11 @@ public partial class Tools : Node
 	
 	public void DuplicateDirectoryContents(string sourceDir, string destinationDir, bool overwriteFiles)
 	{
+		if (!Directory.Exists(sourceDir) || string.IsNullOrEmpty(destinationDir))
+		{
+			throw new DirectoryNotFoundException($"Cannot copy from {sourceDir} to {destinationDir}");
+		}
+
 		// Get all directories in the source directory
 		string[] allDirectories = Directory.GetDirectories(sourceDir, "*", SearchOption.AllDirectories);
 
@@ -231,11 +282,11 @@ public partial class Tools : Node
 			{
 				if (content.Type == ContentType.File)
 				{
-					var fileContent = await httpClient.GetStringAsync(content.DownloadUrl);
+					var fileContent = await httpClient.GetByteArrayAsync(content.DownloadUrl);
 					var filePath = Path.Combine(destinationPath, content.Name);
 
 					// Write the file content to disk
-					await File.WriteAllTextAsync(filePath, fileContent);
+					await File.WriteAllBytesAsync(filePath, fileContent);
 				}
 				else if (content.Type == ContentType.Dir)
 				{

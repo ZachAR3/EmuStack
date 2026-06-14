@@ -1,9 +1,11 @@
 using Godot;
 using System;
+using System.IO;
 
 public partial class ResourceSaveManager : Resource
 {
     public const String SaveGameBasePath = "user://InternalSave";
+    private const string LegacyAppName = "YuzuToolbox";
 	
     [Export()] public float Version;
     [Export()] public SettingsResource _settings;
@@ -27,6 +29,12 @@ public partial class ResourceSaveManager : Resource
         {
             return ResourceLoader.Load(GetSavePath());
         }
+
+        if (CopyLegacySave())
+        {
+            return ResourceLoader.Load(GetSavePath());
+        }
+
         return null;
     }
 
@@ -63,6 +71,28 @@ public partial class ResourceSaveManager : Resource
     {
         var extension = OS.IsDebugBuild() ? ".tres" : ".res";
         return SaveGameBasePath + extension;
+    }
+
+
+    private static bool CopyLegacySave()
+    {
+        var currentSavePath = ProjectSettings.GlobalizePath(GetSavePath());
+        var currentDirectory = Path.GetDirectoryName(currentSavePath);
+        if (string.IsNullOrEmpty(currentDirectory))
+        {
+            return false;
+        }
+
+        var legacyDirectory = Path.Join(Path.GetDirectoryName(currentDirectory), LegacyAppName);
+        var legacySavePath = Path.Join(legacyDirectory, Path.GetFileName(currentSavePath));
+        if (!File.Exists(legacySavePath))
+        {
+            return false;
+        }
+
+        Directory.CreateDirectory(currentDirectory);
+        File.Copy(legacySavePath, currentSavePath, false);
+        return true;
     }
 
 }

@@ -78,7 +78,7 @@ text = "Install location:"
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 size_flags_horizontal = 3
-tooltip_text = "Location to intall Yuzu"
+tooltip_text = "Location to install the selected emulator"
 
 [node name="ExecutableNameLabel" type="Label" parent="ControlsContainer"]
 layout_mode = 2
@@ -123,9 +123,9 @@ text = "Create start shortcut:  "
 
 [node name="CreateShortcutButton" type="CheckBox" parent="ControlsContainer"]
 layout_mode = 2
-tooltip_text = "Creates a start menu shortcut for yuzu-ea (requires auto unpack and admin privleges on windows)"
+tooltip_text = "Creates a start menu shortcut for the selected emulator (requires auto unpack and admin privileges on Windows)"
 focus_mode = 0
-text = "Creates a start menu shortcut for yuzu-ea (requires auto unpack and admin privleges on windows)"
+text = "Creates a start menu shortcut for the selected emulator (requires auto unpack and admin privileges on Windows)"
 alignment = 1
 text_overrun_behavior = 4
 
@@ -136,9 +136,9 @@ text = "Auto update:"
 
 [node name="AutoUpdate" type="CheckBox" parent="ControlsContainer"]
 layout_mode = 2
-tooltip_text = "(Requires create shortcut) Causes shortcut to auto update Yuzu before launching it."
+tooltip_text = "(Requires create shortcut) Auto update the selected emulator before launching it."
 focus_mode = 0
-text = "(Requires create shortcut) Auto update Yuzu at launch."
+text = "(Requires create shortcut) Auto update selected emulator at launch."
 alignment = 1
 text_overrun_behavior = 4
 
