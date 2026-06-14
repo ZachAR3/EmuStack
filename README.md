@@ -1,42 +1,44 @@
-# Notice
-This project is currently dead as the code base is a mess and I don't have time to rewrite everything right now. Furthermore Ryujinx and Yuzu were both DMCA'd so downloads would have to be from forks which dissapear alot. I may come back in the future and gut the project but for the time being all active development has been halted. 
+# EmuStack
 
-# YuzuToolbox
-A simple tool to download and update early access builds of yuzu from the [PineappleEA](https://github.com/pineappleEA/pineapple-src "PineappleEA") Github repo. This tool is currently supports 
-* Cross platform (Windows and Linux)
-* updating with overwrites of previous versions
-* Simple management tools such as clearing shader caches / install directory
-* Shortcut creation and automatic unpacking
-* Basic backup tool (allows save directory to be duplicated into another directory and then restored when desired)
-* Mod management (downloading, installing and updating mods from a variety of sources; + ability to uninstall and detect manually installed mods)
+EmuStack is a desktop utility for downloading, updating, launching, and managing supported Nintendo Switch emulator builds from multiple providers.
+
+Current provider targets:
+* Eden through the official Eden release site
+* Ryubing through the Ryubing update server
+* Legacy Yuzu/PineappleEA support while the compatibility path remains useful
+
+Current tool areas:
+* Cross-platform installs for Windows and Linux, with macOS downloads detected where providers expose them
+* Updating with replacement of previous install files
+* Shortcut creation and automatic unpacking where supported by the provider package
+* Save backup and restore helpers
+* Mod management for installed games from the existing mod sources
 
 # Donate
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/R5R4NFO8V)
 
 # Installing
-The recommended method of install is through Itch.io as it provoides updating features and easier launching: https://zachar3.itch.io/yuzutoolbox
-However, if one would still like to install it without Itch one can simply go to [releases page](https://github.com/ZachAR3/YuzuToolbox/releases) and download the zip file for your os and then extract it into its own folder.
+The recommended install method is through Itch.io because it provides updating features and easier launching: https://zachar3.itch.io/emustack
+To install without Itch, use the [releases page](https://github.com/ZachAR3/EmuStack/releases), download the zip file for your OS, and extract it into its own folder.
 
 # Usage
-Simply launch the program and set your install location, then click download and wait for it to finish. Optionally, you can launch the program with --launcher after initially installing Yuzu to automatically check for updates (update if available) and then launch Yuzu closing itself, The recommended method of using this feature is to enable "Auto Updates" with "Create Shortcut" upon installation so the created shortcut leads back to the launcher with this flag.
+Select a provider, choose an install location, then click download and wait for the install to finish. Optionally, launch the program with `--launcher` after an emulator has been installed to check for updates, install one if available, launch the selected emulator, and close EmuStack.
 
-(WARNING:Most banana mods are meant for the nintendo switch and NOT Yuzu, meaning they will not work if installed. Please do not make issues regarding this)
+Warning: many GameBanana mods are meant for Nintendo Switch hardware rather than emulators, so they may not work when installed through EmuStack.
 
 
-![](https://github.com/ZachAR3/YuzuToolbox/blob/main/DemoImages/DarkInstaller.png?raw=true)
-![](https://github.com/ZachAR3/YuzuToolbox/blob/main/DemoImages/DarkTools.png?raw=true)
-![](https://github.com/ZachAR3/YuzuToolbox/blob/main/DemoImages/DarkModManager.png?raw=true)
-![](https://github.com/ZachAR3/YuzuToolbox/blob/main/DemoImages/DarkSettings.png?raw=true)
-![](https://github.com/ZachAR3/YuzuToolbox/blob/main/DemoImages/LightInstaller.png?raw=true)
-![](https://github.com/ZachAR3/YuzuToolbox/blob/main/DemoImages/LightTools.png?raw=true)
-![](https://github.com/ZachAR3/YuzuToolbox/blob/main/DemoImages/LightModManager.png?raw=true)
-![](https://github.com/ZachAR3/YuzuToolbox/blob/main/DemoImages/LightSettings.png?raw=true)
+![](https://github.com/ZachAR3/EmuStack/blob/main/DemoImages/DarkInstaller.png?raw=true)
+![](https://github.com/ZachAR3/EmuStack/blob/main/DemoImages/DarkTools.png?raw=true)
+![](https://github.com/ZachAR3/EmuStack/blob/main/DemoImages/DarkModManager.png?raw=true)
+![](https://github.com/ZachAR3/EmuStack/blob/main/DemoImages/DarkSettings.png?raw=true)
+![](https://github.com/ZachAR3/EmuStack/blob/main/DemoImages/LightInstaller.png?raw=true)
+![](https://github.com/ZachAR3/EmuStack/blob/main/DemoImages/LightTools.png?raw=true)
+![](https://github.com/ZachAR3/EmuStack/blob/main/DemoImages/LightModManager.png?raw=true)
+![](https://github.com/ZachAR3/EmuStack/blob/main/DemoImages/LightSettings.png?raw=true)
 
 
 # Resources:
-Big thanks to the repo owners of:
+Big thanks to the repo owners whose projects helped inform the original mod-management implementation:
 * https://github.com/pilout/YuzuUpdater/blob/master/YuzuEAUpdater/
-* https://github.com/amakvana/YuzuModDownloader/blob/main/source/YuzuModDownloader/classes/OfficialYuzuModDownloader.cs
 
-I was able to use a lot of their code for the mod managing, sections which I found difficult (Especially figuring out the XPaths).
-
+Their work was especially helpful around mod-management behavior and source parsing.
