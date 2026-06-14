@@ -10,11 +10,11 @@ config_version=5
 
 [application]
 
-config/name="YuzuToolbox"
+config/name="EmuStack"
 run/main_scene="res://Scenes/Home.tscn"
 config/features=PackedStringArray("4.2", "C#", "Forward Plus")
 boot_splash/bg_color=Color(0.0431373, 0.0470588, 0.0509804, 1)
-boot_splash/image="res://ImageAssets/SplashScreen.png"
+boot_splash/image="res://ImageAssets/SplashScreen.svg"
 boot_splash/fullsize=false
 config/icon="res://ImageAssets/Icon.svg"
 boot_splash/minimum_display_time=3000
@@ -27,7 +27,7 @@ window/size/extend_to_title=true
 
 [dotnet]
 
-project/assembly_name="YuzuToolbox"
+project/assembly_name="EmuStack"
 
 [input]
 

@@ -1,6 +1,6 @@
 ﻿Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 2012
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "YuzuToolbox", "YuzuToolbox.csproj", "{F491ED9E-92E0-418F-819D-038386BC5137}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EmuStack", "EmuStack.csproj", "{F491ED9E-92E0-418F-819D-038386BC5137}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
