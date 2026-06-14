@@ -7,7 +7,8 @@
 	using System.Text.Json;
 	using System.Threading.Tasks;
 	using NativeFileDialogSharp;
-	using YuzuEAUpdateManager.Scripts.Sources;
+	using EmuStack.Scripts.Sources;
+	using EmuStack.Scripts.Modes;
 	using Button = Godot.Button;
 	using ProgressBar = Godot.ProgressBar;
 
@@ -39,15 +40,13 @@
 		// Code for handling sources and their associated names with each
 		enum Sources
 		{
-			Official,
-			Banana,
-			TotkHolo,
-			All
+			Banana = 1,
+			TotkHolo = 2,
+			All = 3
 		}
 
-		private List<string> _sourceNames;
 		private Dictionary<string, List<Mod>> _selectedSourceMods = new();
-		private int _selectedSource = (int)Sources.Official;
+		private int _selectedSource = (int)Sources.Banana;
 		private Dictionary<int, string> _gameSpecificSources = new();
 
 		// Game id, game name
@@ -59,10 +58,10 @@
 
 		private StandardModManagement _standardModManager = new();
 		private BananaManager _bananaManager = new();
-		private OfficialManager _officialManager = new();
 		private TotkHoloManager _totkHoloManager = new();
 
 		private int _modsPage = 1;
+		private ProviderSettingsResource ProviderSettings => Globals.Instance.CurrentProviderSettings;
 
 
 		// Godot Functions
@@ -81,14 +80,12 @@
 
 			_titleRequester.Connect("request_completed", new Callable(this, nameof(GetTitles)));
 
-			_sourceNames = Enum.GetNames(typeof(Sources)).ToList();
-			
 			// Sets zelda totk specific source with game id and source value
 			_gameSpecificSources[(int)Sources.TotkHolo] = "0100F2C0115B6000";
 
 			_modLocationButton.Text =
-				Globals.Instance.Settings.ModsLocation.PadLeft(
-					Globals.Instance.Settings.ModsLocation.Length + _selectionPaddingLeft, ' ');
+				ProviderSettings.ModsLocation.PadLeft(
+					ProviderSettings.ModsLocation.Length + _selectionPaddingLeft, ' ');
 
 			AddSources();
 			await GetGamesAndMods();
@@ -110,61 +107,56 @@
 		}
 		
 		
-		private async Task GetGamesAndMods(int source = (int)Sources.Official, int selectedGame = 0)
+		private async Task GetGamesAndMods(int source = (int)Sources.Banana, int selectedGame = 0)
 		{
-			await Task.Run(async () =>
+			_loadingPanel.Visible = true;
+			if (!Directory.Exists(ProviderSettings.ModsLocation))
 			{
-				Callable.From(() =>
+				Tools.Instance.AddError($@"mods location does not exist. Please set a valid location and refresh.");
+				_loadingPanel.Visible = false;
+				return;
+			}
+
+			var requestError = _titleRequester.Request(
+				"https://switchbrew.org/w/index.php?title=Title_list/Games&mobileaction=toggle_view_desktop");
+			if (requestError != Error.Ok)
+			{
+				Tools.Instance.AddError($@"failed to request titles list: {requestError}");
+				_loadingPanel.Visible = false;
+				return;
+			}
+
+			await ToSignal(_titleRequester,
+				"request_completed"); // Waits for titles to be retrieved before checking installed titles against them.
+
+			// Checks if no titles were found, if they weren't gives error and cancels.
+			if (_titles.Count <= 0)
+			{
+				Tools.Instance.AddError("Failed to retrieve titles list, check connection and try again later.");
+				_loadingPanel.Visible = false;
+				return;
+			}
+
+			foreach (var gameModFolder in Directory.GetDirectories(ProviderSettings.ModsLocation))
+			{
+				string gameId = gameModFolder.GetFile(); // Gets game id by grabbing the folders name
+				if (_titles.TryGetValue(gameId, out var gameName))
 				{
-					_loadingPanel.Visible = true;
-					if (!Directory.Exists(Globals.Instance.Settings.ModsLocation))
+					_installedGames[gameId] = new() { GameName = gameName };
+					GetInstalledMods(gameId);
+					_gamePickerButton.AddItem($@"    {gameName}");
+					if (_gameSpecificSources.ContainsKey(_selectedSource) && !_gameSpecificSources.ContainsValue(gameId))
 					{
-						Tools.Instance.AddError($@"mods location does not exist. Please set a valid location and refresh.");
-						_loadingPanel.Visible = false;
-						return;
+						continue;
 					}
-
-					_titleRequester.Request(
-						"https://switchbrew.org/w/index.php?title=Title_list/Games&mobileaction=toggle_view_desktop");
-				}).CallDeferred();
-
-				// TODO #65
-				GodotThread.SetThreadSafetyChecksEnabled(false);
-				await ToSignal(_titleRequester,
-					"request_completed"); // Waits for titles to be retrieved before checking installed titles against them.
-
-				// Checks if no titles were found, if they weren't gives error and cancels.
-				if (_titles.Count <= 0)
-				{
-					Tools.Instance.AddError("Failed to retrieve titles list, check connection and try again later.");
-					_loadingPanel.Visible = false;
-					return;
+					await GetAvailableMods(gameId, source);
+				}
+				else
+				{ 
+					Tools.Instance.AddError($@"could not find associated game title for: {gameId}");
 				}
 
-				foreach (var gameModFolder in Directory.GetDirectories(Globals.Instance.Settings.ModsLocation))
-				{
-					string gameId = gameModFolder.GetFile(); // Gets game id by grabbing the folders name
-					if (_titles.TryGetValue(gameId, out var gameName))
-					{
-						_installedGames[gameId] = new() { GameName = gameName };
-						GetInstalledMods(gameId);
-						_gamePickerButton.AddItem($@"    {gameName}");
-						if (_gameSpecificSources.ContainsKey(_selectedSource) && !_gameSpecificSources.ContainsValue(gameId))
-						{
-							continue;
-						}
-						await Task.Run(async () =>
-						{
-							await GetAvailableMods(gameId, source);
-						});
-					}
-					else
-					{ 
-						Tools.Instance.AddError($@"could not find associated game title for: {gameId}");
-					}
-
-				}
-			});
+			}
 			
 			// Sets the first game as selected by default
 			if (_installedGames.Count > 0)
@@ -183,7 +175,7 @@
 
 		private async Task GetAvailableMods(string gameId, int source)
 		{
-			if (gameId == null && !_installedGames.ContainsKey(gameId))
+			if (gameId == null || !_installedGames.ContainsKey(gameId))
 			{
 				Tools.Instance.AddError("game ID invalid. Cancelling...");
 				_loadingPanel.Visible = false;
@@ -195,35 +187,27 @@
 			{
 				switch (source)
 				{
-					case (int)Sources.Official:
-						_selectedSourceMods = await _officialManager.GetAvailableMods(_selectedSourceMods, _installedGames,
-							gameId, (int)Sources.Official);
+					case (int)Sources.Banana:
+						_selectedSourceMods = await _bananaManager.GetAvailableMods(_selectedSourceMods, _installedGames,
+							gameId, (int)Sources.Banana, _modsPage);
 						break;
 
-						case (int)Sources.Banana:
-							_selectedSourceMods = await _bananaManager.GetAvailableMods(_selectedSourceMods, _installedGames,
-								gameId, (int)Sources.Banana, _modsPage);
-							break;
+					case (int)Sources.TotkHolo:
+						_selectedSourceMods =
+							await _totkHoloManager.GetAvailableMods(_selectedSourceMods, gameId, (int)Sources.TotkHolo,
+								Globals.Instance.Settings.GetCompatibleVersions);
+						break;
 
-						case (int)Sources.TotkHolo:
-							_selectedSourceMods =
-								await _totkHoloManager.GetAvailableMods(_selectedSourceMods, gameId, (int)Sources.TotkHolo,
-									Globals.Instance.Settings.GetCompatibleVersions);
-							break;
-
-						case (int)Sources.All:
-							// Adds both official and banana mods the our source list
-							_selectedSourceMods = await _officialManager.GetAvailableMods(_selectedSourceMods, _installedGames,
-								gameId, (int)Sources.Official);
-							_selectedSourceMods = await _bananaManager.GetAvailableMods(_selectedSourceMods, _installedGames,
-								gameId, (int)Sources.Banana, _modsPage);
-							if (_currentGameId == _gameSpecificSources[(int)Sources.TotkHolo])
-							{
-								_selectedSourceMods = await _totkHoloManager.GetAvailableMods(_selectedSourceMods,
-									gameId, (int)Sources.TotkHolo, Globals.Instance.Settings.GetCompatibleVersions);
-							}
-							break;
-					}
+					case (int)Sources.All:
+						_selectedSourceMods = await _bananaManager.GetAvailableMods(_selectedSourceMods, _installedGames,
+							gameId, (int)Sources.Banana, _modsPage);
+						if (gameId == _gameSpecificSources[(int)Sources.TotkHolo])
+						{
+							_selectedSourceMods = await _totkHoloManager.GetAvailableMods(_selectedSourceMods,
+								gameId, (int)Sources.TotkHolo, Globals.Instance.Settings.GetCompatibleVersions);
+						}
+						break;
+				}
 			}
 			catch (ArgumentException argumentException)
 			{
@@ -251,7 +235,7 @@
 				{
 					var installedModsJson =
 						JsonSerializer.Deserialize<Dictionary<string, List<Mod>>>(File.ReadAllText(_installedModsPath));
-					if (installedModsJson.TryGetValue(gameId, out var gameMods))
+					if (installedModsJson != null && installedModsJson.TryGetValue(gameId, out var gameMods))
 					{
 						_installedMods[gameId] = gameMods;
 					}
@@ -259,7 +243,7 @@
 
 				// Adds local mods that aren't in the data base
 				foreach (var modDirectory in
-						 Directory.GetDirectories($@"{Globals.Instance.Settings.ModsLocation}/{gameId}"))
+						 Directory.GetDirectories(Path.Join(ProviderSettings.ModsLocation, gameId)))
 				{
 					if (!modDirectory.GetFile().StartsWith("Managed"))
 					{
@@ -274,7 +258,7 @@
 
 						if (_installedMods[gameId].Any(mod => mod.InstalledPath == modToAdd.InstalledPath))
 						{
-							return;
+							continue;
 						}
 
 						_installedMods[gameId].Add(modToAdd);
@@ -285,7 +269,6 @@
 			{
 				Tools.Instance.AddError($@"cannot find installed mods error: {installedError}");
 				_loadingPanel.Visible = false;
-				throw;
 			}
 
 			SaveInstalledMods();
@@ -299,6 +282,7 @@
 			DisableInteraction();
 
 			var tempModsList = new Dictionary<string, List<Mod>>();
+			var oldModCount = _selectedSourceMods.TryGetValue(_currentGameId, out var oldMods) ? oldMods.Count : 0;
 			await Task.Run(async () =>
 			{
 				switch (_selectedSource)
@@ -311,13 +295,16 @@
 					case (int)Sources.All:
 						tempModsList = await _bananaManager.GetAvailableMods(_selectedSourceMods, _installedGames,
 							_currentGameId,
-							_selectedSource, _modsPage);
+							(int)Sources.Banana, _modsPage);
 						break;
 				}
 			});
 
 			// If our old list is the same as the new one, disabled the load more as no more mods are available.
-			_loadMoreButton.Disabled = tempModsList == _selectedSourceMods || _loadMoreButton.Disabled;
+			_loadMoreButton.Disabled =
+				!tempModsList.TryGetValue(_currentGameId, out var tempMods) ||
+				tempMods.Count <= oldModCount ||
+				_loadMoreButton.Disabled;
 			_selectedSourceMods = tempModsList;
 
 			DisableInteraction(false);
@@ -362,6 +349,13 @@
 
 		private void GetTitles(long result, long responseCode, string[] headers, byte[] body)
 		{
+			if (result != (int)HttpRequest.Result.Success || responseCode is < 200 or >= 400)
+			{
+				Tools.Instance.AddError($@"cannot retrieve titles, result: {result}, HTTP status: {responseCode}");
+				_loadingPanel.Visible = false;
+				return;
+			}
+
 			string[]
 				gamesList = Encoding.UTF8.GetString(body).Split("<tr>"); // Splits the list into the beginnings of each game
 			var gameList =
@@ -459,7 +453,7 @@
 			catch (Exception updateError)
 			{
 				Tools.Instance.AddError($@"failed to update mod:{updateError}");
-				throw;
+				return false;
 			}
 
 			SelectGame(_gamePickerButton.Selected);
@@ -502,7 +496,7 @@
 		}
 
 
-		private async Task Refresh(int source = (int)Sources.Official)
+		private async Task Refresh(int source = (int)Sources.Banana)
 		{
 			// Clean up
 			_modList.Clear();
@@ -523,6 +517,7 @@
 		{	
 			foreach (var source in Enum.GetValues(typeof(Sources)))
 			{
+				var sourceId = (int)source;
 				switch (source)
 				{
 					// Breaks if source is totkholo but selected game isn't
@@ -530,12 +525,18 @@
 						break;
 					
 					default:
-						_sourcePickerButton.AddItem(_sourceNames[(int)source].PadLeft(_sourceNames[(int)source].Length + _selectionPaddingLeft));
+						var sourceName = source.ToString();
+						_sourcePickerButton.AddItem(sourceName.PadLeft(sourceName.Length + _selectionPaddingLeft), sourceId);
 						break;
 				}
 			}
 
-			_sourcePickerButton.Select(_selectedSource);
+			var selectedSourceIndex = GetSourceButtonIndex(_selectedSource);
+			_sourcePickerButton.Select(selectedSourceIndex);
+			if (_sourcePickerButton.ItemCount > 0)
+			{
+				_selectedSource = _sourcePickerButton.GetItemId(selectedSourceIndex);
+			}
 		}
 
 
@@ -561,11 +562,12 @@
 		
 		private async Task SelectSource(int sourceIndex)
 		{
-			_selectedSource = _sourceNames.IndexOf(_sourcePickerButton.GetItemText(sourceIndex).Trim());
-			if (_selectedSource == -1)
+			_selectedSource = _sourcePickerButton.GetItemId(sourceIndex);
+			if (!Enum.IsDefined(typeof(Sources), _selectedSource))
 			{
-				Tools.Instance.AddError("source not found, please file a bug report. Defaulting back to official");
-				_sourcePickerButton.Select(0);
+				Tools.Instance.AddError("source not found, please file a bug report. Defaulting back to GameBanana");
+				_selectedSource = (int)Sources.Banana;
+				_sourcePickerButton.Select(GetSourceButtonIndex(_selectedSource));
 				return;
 			}
 
@@ -583,6 +585,20 @@
 			}
 
 			await Refresh(_selectedSource);
+		}
+
+
+		private int GetSourceButtonIndex(int sourceId)
+		{
+			for (var itemIndex = 0; itemIndex < _sourcePickerButton.ItemCount; itemIndex++)
+			{
+				if (_sourcePickerButton.GetItemId(itemIndex) == sourceId)
+				{
+					return itemIndex;
+				}
+			}
+
+			return 0;
 		}
 		
 		
@@ -602,7 +618,7 @@
 				}
 
 				// Deletes non-known installed mods
-				string modsPath = Path.Join(Globals.Instance.Settings.ModsLocation, gameId);
+				string modsPath = Path.Join(ProviderSettings.ModsLocation, gameId);
 				foreach (var modPath in Directory.GetDirectories(modsPath))
 				{
 					Tools.DeleteDirectoryContents(modPath);
@@ -620,6 +636,12 @@
 		
 		private void SaveInstalledMods()
 		{
+			var saveDirectory = Path.GetDirectoryName(_installedModsPath);
+			if (!string.IsNullOrEmpty(saveDirectory))
+			{
+				Directory.CreateDirectory(saveDirectory);
+			}
+
 			var serializedMods = JsonSerializer.Serialize(_installedMods);
 			File.WriteAllText(_installedModsPath, serializedMods);
 		}
@@ -634,8 +656,10 @@
 					await _totkHoloManager.InstallMod(gameId, mod);
 					break;
 				default:
-					await _standardModManager.InstallMod(gameId, mod);
-					_downloadBar.Value = 100;
+					if (await _standardModManager.InstallMod(gameId, mod))
+					{
+						_downloadBar.Value = 100;
+					}
 					break;
 			}
 			
@@ -768,37 +792,42 @@
 
 		private void ModLocationPressed()
 		{
-			var modLocationInput = Dialog.FolderPicker(Globals.Instance.Settings.ModsLocation).Path;
+			var modLocationInput = Dialog.FolderPicker(ProviderSettings.ModsLocation).Path;
 			if (modLocationInput != null)
 			{
-				Globals.Instance.Settings.ModsLocation = modLocationInput;
+				ProviderSettings.ModsLocation = modLocationInput;
 			}
 
-			if (Globals.Instance.Settings.ModsLocation != null)
+			if (ProviderSettings.ModsLocation != null)
 			{
 				_modLocationButton.Text =
-					Globals.Instance.Settings.ModsLocation.PadLeft(
-						Globals.Instance.Settings.ModsLocation.Length + _selectionPaddingLeft, ' ');
+					ProviderSettings.ModsLocation.PadLeft(
+						ProviderSettings.ModsLocation.Length + _selectionPaddingLeft, ' ');
 			}
 
-			Globals.Instance.SaveManager.WriteSave(Globals.Instance.Settings);
+			Globals.Instance.SyncCurrentProviderSettings();
 		}
 
 
-		private void RefreshPressed()
+		private async void RefreshPressed()
 		{
-			Refresh(_selectedSource);
+			await Refresh(_selectedSource);
 		}
 
 		private void UpdateDownloadProgress()
 		{
+			if (_downloadRequester.GetBodySize() <= 0)
+			{
+				return;
+			}
+
 			_downloadBar.Value = (float)_downloadRequester.GetDownloadedBytes() / _downloadRequester.GetBodySize() * 100;
 		}
 
 
-		private void SourceSelected(int selectedSource)
+		private async void SourceSelected(int selectedSource)
 		{
-			SelectSource(selectedSource);
+			await SelectSource(selectedSource);
 		}
 
 

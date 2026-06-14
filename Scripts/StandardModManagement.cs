@@ -21,70 +21,71 @@ public partial class StandardModManagement : Node
 	{
 		try
 		{
-			await Task.Run(async () =>
+			string downloadPath = Path
+				.Join(Globals.Instance.CurrentProviderSettings.ModsLocation, gameId, $@"{mod.ModName.Replace(":", ".")}-Download");
+			string installPath = Path
+				.Join(Globals.Instance.CurrentProviderSettings.ModsLocation, gameId, $@"Managed{mod.ModName.Replace(":", ".")}");
+
+			// Downloads the mod zip to the download path
+			DownloadRequester.DownloadFile = downloadPath;
+			var requestError = DownloadRequester.Request(mod.ModUrl);
+			if (requestError != Error.Ok)
 			{
-				// TODO #65
-				GodotThread.SetThreadSafetyChecksEnabled(false);
-				
-				string downloadPath = Path
-					.Join(Globals.Instance.Settings.ModsLocation, gameId, $@"{mod.ModName.Replace(":", ".")}-Download");
-				string installPath = Path
-					.Join(Globals.Instance.Settings.ModsLocation, gameId, $@"Managed{mod.ModName.Replace(":", ".")}");
+				throw new InvalidOperationException($@"Failed to start mod download: {requestError}");
+			}
+			DownloadUpdateTimer.Start();
+			await ToSignal(DownloadRequester, "request_completed");
+			DownloadUpdateTimer.Stop();
 
-				// Downloads the mod zip to the download path
-				DownloadRequester.DownloadFile = downloadPath;
-				DownloadRequester.Request(mod.ModUrl);
-				DownloadUpdateTimer.Start();
-				await ToSignal(DownloadRequester, "request_completed");
-				DownloadUpdateTimer.Stop();
+			await using (var stream = File.OpenRead(downloadPath))
+			{
+				var reader = ArchiveFactory.OpenArchive(stream);
 
-				await using (var stream = File.OpenRead(downloadPath))
+				Directory.CreateDirectory(installPath + "-temp");
+
+				foreach (var entry in reader.Entries)
 				{
-					var reader = ArchiveFactory.Open(stream);
-
-					Directory.CreateDirectory(installPath + "-temp");
-    
-					foreach (var entry in reader.Entries)
+					if (!entry.IsDirectory)
 					{
-						if (!entry.IsDirectory)
+						entry.WriteToDirectory(installPath + "-temp", new ExtractionOptions()
 						{
-							entry.WriteToDirectory(installPath + "-temp", new ExtractionOptions()
-							{
-								ExtractFullPath = true,
-								Overwrite = true
-							});
-						}
+							ExtractFullPath = true,
+							Overwrite = true
+						});
 					}
 				}
+			}
 
-				if (Directory.Exists(installPath))
-				{
-					Tools.DeleteDirectoryContents(installPath);
-				}
-				// Moves the files from the temp folder into the install path
-				foreach (var folder in Directory.GetDirectories(installPath + "-temp"))
-				{ 
-					Tools.MoveFilesAndDirs(folder, installPath);
-				}
-				
-				// Cleanup
+			if (Directory.Exists(installPath))
+			{
+				Tools.DeleteDirectoryContents(installPath);
+			}
+			// Moves the files from the temp folder into the install path
+			Tools.MoveFilesAndDirs(installPath + "-temp", installPath);
+
+			// Cleanup
+			if (Directory.Exists(installPath + "-temp"))
+			{
 				Directory.Delete(installPath + "-temp", true);
-				File.Delete(downloadPath);
+			}
+			File.Delete(downloadPath);
 
-				// Sets the installed path and initializes the installed mods list for the given game if needed
-				mod.InstalledPath = installPath;
-				InstalledMods[gameId] = !InstalledMods.ContainsKey(gameId)
-					? new List<Mod>()
-					: InstalledMods[gameId];
-				
-				InstalledMods[gameId].Add(mod);
+			// Sets the installed path and initializes the installed mods list for the given game if needed
+			mod.InstalledPath = installPath;
+			InstalledMods[gameId] = !InstalledMods.ContainsKey(gameId)
+				? new List<Mod>()
+				: InstalledMods[gameId];
+
+			InstalledMods[gameId].Add(mod);
+			if (SelectedSourceMods.ContainsKey(gameId))
+			{
 				SelectedSourceMods[gameId].Remove(mod);
-			});
+			}
 		}
 		catch (Exception installError)
 		{
 			Tools.Instance.AddError($@"failed to install mod:{installError}");
-			throw;
+			return false;
 		}
 		
 		return true;
@@ -107,7 +108,7 @@ public partial class StandardModManagement : Node
 			InstalledMods[gameId].Remove(mod);
 			
 			// If the mod is available online re-adds it to the source list
-			if (mod.ModUrl != null && source == mod.Source || source == sourcesAll)
+			if (mod.ModUrl != null && (source == mod.Source || source == sourcesAll))
 			{
 				// If there is no mod list for the game id creates one
 				SelectedSourceMods[gameId] =

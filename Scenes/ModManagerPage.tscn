@@ -204,7 +204,7 @@ text = "Selected source:"
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
-tooltip_text = "Button to change the currently selected game."
+tooltip_text = "Button to change the current mod source."
 text_overrun_behavior = 4
 metadata/_edit_use_anchors_ = true
 
@@ -220,9 +220,9 @@ size_flags_horizontal = 3
 size_flags_vertical = 3
 tooltip_text = "Button to change the mods folder. 
 Linux something like: 
-/home/username/.local/share/yuzu/load/.
+/home/username/.local/share/<emulator>/load/.
 Windows it should be something like
-C:\\Users\\username\\AppData\\Roaming\\yuzu\\load"
+C:\\Users\\username\\AppData\\Roaming\\<emulator>\\load"
 alignment = 0
 text_overrun_behavior = 4
 
@@ -256,8 +256,8 @@ metadata/_edit_use_anchors_ = true
 
 [node name="ClearMods" type="Button" parent="SideBar"]
 layout_mode = 2
-tooltip_text = "Clear mods folder (WANRING CLEARS THE ENTIRE MOD FOLDER FOR THE SELECTED GAME)"
-text = "Clear mods folder (WANRING CLEARS THE ENTIRE MOD FOLDER FOR THE SELECTED GAME)"
+tooltip_text = "Clear mods folder (WARNING CLEARS THE ENTIRE MOD FOLDER FOR THE SELECTED GAME)"
+text = "Clear mods folder (WARNING CLEARS THE ENTIRE MOD FOLDER FOR THE SELECTED GAME)"
 text_overrun_behavior = 4
 metadata/_edit_use_anchors_ = true
 

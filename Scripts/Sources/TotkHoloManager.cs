@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using Octokit;
 using HttpClient = System.Net.Http.HttpClient;
 
-namespace YuzuEAUpdateManager.Scripts.Sources;
+namespace EmuStack.Scripts.Sources;
 
 
 
@@ -93,7 +93,7 @@ public class TotkHoloManager
             await Task.Run(async() =>
             {
                 string installPath = Path
-                    .Join(Globals.Instance.Settings.ModsLocation, gameId, $@"Managed{mod.ModName.Replace(":", ".")}");
+                    .Join(Globals.Instance.CurrentProviderSettings.ModsLocation, gameId, $@"Managed{mod.ModName.Replace(":", ".")}");
 
                 var exception = await Tools.Instance.DownloadFolder(RepoOwner, RepoName, mod.ModUrl, installPath);
                 if (exception != null)

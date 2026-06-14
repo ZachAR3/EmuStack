@@ -17,22 +17,42 @@ public class BananaManager
 			modList[gameId] = new List<Mod>();
 		}
 		
-		int bananaGameId = GetGameBananaGameId(installedGames[gameId].GameName);
+		int bananaGameId = await GetGameBananaGameId(installedGames[gameId].GameName);
 		if (bananaGameId == -1)
 		{
-			return null;
+			return modList;
 		}
 		
 		var gameModsSource = await _httpClient
 			.GetAsync($@"https://gamebanana.com/apiv11/Game/{bananaGameId}/Subfeed?_nPage={page}");
-		var jsonMods = JObject.Parse(await gameModsSource.Content.ReadAsStringAsync());
-
-
-		foreach (var mod in jsonMods["_aRecords"])
+		if (!gameModsSource.IsSuccessStatusCode)
 		{
-			string modPage = _httpClient.GetAsync($@"https://gamebanana.com/apiv11/Mod/{mod["_idRow"]}/Files").Result.Content.ReadAsStringAsync().Result;
+			return modList;
+		}
+
+		var jsonMods = JObject.Parse(await gameModsSource.Content.ReadAsStringAsync());
+		var records = jsonMods["_aRecords"];
+		if (records == null)
+		{
+			return modList;
+		}
+
+
+		foreach (var mod in records)
+		{
+			var filesResponse = await _httpClient.GetAsync($@"https://gamebanana.com/apiv11/Mod/{mod["_idRow"]}/Files");
+			if (!filesResponse.IsSuccessStatusCode)
+			{
+				continue;
+			}
+
+			string modPage = await filesResponse.Content.ReadAsStringAsync();
 			var modPageContent = JToken.Parse(modPage);
-			string downloadUrl = modPageContent[0]["_sDownloadUrl"].ToString();
+			string downloadUrl = modPageContent[0]?["_sDownloadUrl"]?.ToString();
+			if (string.IsNullOrEmpty(downloadUrl))
+			{
+				continue;
+			}
 			
 			// If there is an available compatible version sets it as that, otherwises sets it as NA
 			List<string> compatibleVersions = mod["_sVersion"] == null
@@ -53,10 +73,16 @@ public class BananaManager
 	}
 	
 	 
-	private int GetGameBananaGameId(string gameName)
+	private async Task<int> GetGameBananaGameId(string gameName)
 	{
 		// Searches for the game ID using the name from banana mods
-		string searchContent = _httpClient.GetAsync("https://gamebanana.com/apiv11/Util/Game/NameMatch?_sName=" + gameName).Result.Content.ReadAsStringAsync().Result;
+		var searchResponse = await _httpClient.GetAsync("https://gamebanana.com/apiv11/Util/Game/NameMatch?_sName=" + gameName);
+		if (!searchResponse.IsSuccessStatusCode)
+		{
+			return -1;
+		}
+
+		string searchContent = await searchResponse.Content.ReadAsStringAsync();
 		
 		var jsonContent = JObject.Parse($@"{searchContent}");
 		var modId = jsonContent["_aRecords"]?[0]?["_idRow"]!.ToString();
