@@ -1,6 +1,0 @@
-Colors
-Accent yellow:#fdd809
-Primary:#212121
-Secondary:#363636
-Highlighted
-

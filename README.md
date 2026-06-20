@@ -70,13 +70,3 @@ Run EmuStack from the terminal with `--launcher` after an emulator is installed 
 
 The original Yuzu Toolbox codebase is preserved on the `legacy` branch for reference. `main` now tracks the EmuStack rewrite.
 
-## Screenshots
-
-![](https://github.com/ZachAR3/EmuStack/blob/main/DemoImages/DarkInstaller.png?raw=true)
-![](https://github.com/ZachAR3/EmuStack/blob/main/DemoImages/DarkTools.png?raw=true)
-![](https://github.com/ZachAR3/EmuStack/blob/main/DemoImages/DarkModManager.png?raw=true)
-![](https://github.com/ZachAR3/EmuStack/blob/main/DemoImages/DarkSettings.png?raw=true)
-![](https://github.com/ZachAR3/EmuStack/blob/main/DemoImages/LightInstaller.png?raw=true)
-![](https://github.com/ZachAR3/EmuStack/blob/main/DemoImages/LightTools.png?raw=true)
-![](https://github.com/ZachAR3/EmuStack/blob/main/DemoImages/LightModManager.png?raw=true)
-![](https://github.com/ZachAR3/EmuStack/blob/main/DemoImages/LightSettings.png?raw=true)
