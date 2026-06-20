@@ -1,41 +1,15 @@
-<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<!-- Created with Inkscape (http://www.inkscape.org/) -->
-
-<svg
-   width="105.77543mm"
-   height="136.75327mm"
-   viewBox="0 0 105.77543 136.75327"
-   version="1.1"
-   id="svg5"
-   xmlns="http://www.w3.org/2000/svg"
-   xmlns:svg="http://www.w3.org/2000/svg">
-  <defs
-     id="defs2" />
-  <g
-     id="layer1"
-     transform="translate(-52.537439,-64.209585)">
-    <path
-       id="path4352"
-       style="fill:#00e4cb;fill-opacity:1;stroke:#00e4cb;stroke-width:1.7;stroke-opacity:1"
-       d="M 104.99979,96.887109 A 51.612801,51.612801 0 0 0 53.387439,148.49998 51.612801,51.612801 0 0 0 104.99979,200.11285 Z" />
-    <path
-       id="path14024"
-       style="fill:#ff0000;stroke:#e40000;stroke-width:1.7"
-       d="M 105.85,65.059587 V 168.28533 A 51.612801,51.612801 0 0 0 157.46287,116.67246 51.612801,51.612801 0 0 0 105.85,65.059587 Z" />
-    <rect
-       style="fill:#000000;fill-opacity:1;stroke:#0f1c00;stroke-width:1.7;stroke-opacity:1"
-       id="rect14807"
-       width="80.798622"
-       height="34.969452"
-       x="64.600685"
-       y="109.04948" />
-    <path
-       style="fill:#d6d6d6;fill-opacity:1;stroke:#d6d6d6;stroke-width:1.7;stroke-opacity:1"
-       d="M 131.65643,108.19947 V 96.0371 L 104.99979,96.887108 79.193614,96.0371 v 12.16237 h 2.018342 L 81.176592,97.607124 105,98.501855 l 24.00408,-1.016741 0.0407,10.714356 z"
-       id="path16789" />
-    <path
-       id="path18196"
-       style="fill:#d6d6d6;fill-opacity:1;stroke:#d6d6d6;stroke-width:1.7;stroke-opacity:1"
-       d="m 118.90552,114.97282 a 2.8839213,3.0129285 62.170709 0 0 -1.41145,3.76092 0.46011651,22.224606 62.170709 0 0 -17.44041,8.93204 0.46011651,22.224606 62.170709 0 0 -19.43934,10.78197 0.46011651,22.224606 62.170709 0 0 19.869,-9.96806 0.46011651,22.224606 62.170709 0 0 17.21295,-9.36184 2.8839213,3.0129285 62.170709 0 0 3.90204,0.95596 2.8839213,3.0129285 62.170709 0 0 1.5451,-1.93701 l -2.07249,1.09405 -1.76688,-3.34704 2.07477,-1.09526 a 2.8839213,3.0129285 62.170709 0 0 -2.47329,0.18427 z" />
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="stack-gradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#00e4cb" />
+      <stop offset="100%" stop-color="#0a84ff" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="#0d0f11" />
+  <g fill="url(#stack-gradient)">
+    <path d="M96 320 h320 a24 24 0 0 1 24 24 v40 a24 24 0 0 1 -24 24 H96 a24 24 0 0 1 -24 -24 v-40 a24 24 0 0 1 24 -24 z" />
+    <path d="M136 224 h240 a24 24 0 0 1 24 24 v40 a24 24 0 0 1 -24 24 H136 a24 24 0 0 1 -24 -24 v-40 a24 24 0 0 1 24 -24 z" />
+    <path d="M176 128 h160 a24 24 0 0 1 24 24 v40 a24 24 0 0 1 -24 24 H176 a24 24 0 0 1 -24 -24 v-40 a24 24 0 0 1 24 -24 z" />
   </g>
 </svg>
