@@ -4,3 +4,12 @@
 Releases/
 .vs/
 .vscode/
+
+# macOS / IDE / user-specific files
+.DS_Store
+.claude/
+*.DotSettings.user
+test.x86_64
+
+# Local debug tooling
+/tools/
