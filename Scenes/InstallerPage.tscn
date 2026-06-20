@@ -11,7 +11,6 @@ bg_color = Color(0.168627, 0.180392, 0.188235, 0.529412)
 layout_mode = 3
 anchors_preset = 0
 script = ExtResource("1_3lw4p")
-_titlesKeySite = "https://switchbrew.org/w/index.php?title=Title_list/Games&mobileaction=toggle_view_desktop"
 _icon = ExtResource("2_dhhpw")
 _versionButton = NodePath("ControlsContainer/VersionSelectionButton")
 _createShortcutButton = NodePath("ControlsContainer/CreateShortcutButton")
@@ -82,13 +81,13 @@ tooltip_text = "Location to install the selected emulator"
 
 [node name="ExecutableNameLabel" type="Label" parent="ControlsContainer"]
 layout_mode = 2
-tooltip_text = "Set a custom executable name, e.g yuzu (turns into yuzu.exe or yuzu.appimage)"
+tooltip_text = "Set a custom executable name for the selected emulator"
 mouse_filter = 1
 text = "Executable Name:"
 
 [node name="ExecutableName" type="LineEdit" parent="ControlsContainer"]
 layout_mode = 2
-text = "yuzu"
+text = "Eden"
 alignment = 1
 
 [node name="ExtractLabel" type="Label" parent="ControlsContainer"]
@@ -240,7 +239,8 @@ rounded = true
 [node name="DownloadProgressUpdater" type="Timer" parent="DownloadWindow/Window"]
 wait_time = 0.1
 
-[connection signal="toggled" from="ControlsContainer/CustomVersion/CustomVersionCheckBox" to="." method="CustomVersionSpinBoxEditable"]
+[connection signal="toggled" from="ControlsContainer/CustomVersion/CustomVersionCheckBox" to="." method="CustomVersionEditable"]
+[connection signal="toggled" from="ControlsContainer/CreateShortcutButton" to="." method="CreateShortcutToggled"]
 [connection signal="pressed" from="ControlsContainer/LocationButton" to="." method="OnInstallLocationButtonPressed"]
 [connection signal="text_changed" from="ControlsContainer/ExecutableName" to="." method="ExecutableNameChanged"]
 [connection signal="toggled" from="ControlsContainer/ExtractButton" to="." method="AutoUnpackToggled"]

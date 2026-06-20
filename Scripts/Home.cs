@@ -1,5 +1,3 @@
-using System.Collections.Generic;
-using System.Linq;
 using Godot;
 using Godot.Collections;
 
@@ -7,61 +5,62 @@ using Godot.Collections;
 public partial class Home : Control
 {
 	[ExportGroup("App")]
-	[Export()] private float _appVersion = 2f;
-	[Export()] private OptionButton _appModesButton;
-	[Export()] private TextureRect _darkBg;
-	[Export()] private TextureRect _lightBg;
-	[Export()] private ColorRect _downloadWindowApp;
-	[Export()] private AudioStreamPlayer _backgroundAudio;
-	[Export()] private CheckButton _muteButton;
-	[Export()] private CheckButton _enableLightTheme;
-	[Export()] private Array<Theme> _themes;
-	[Export()] private Array<StyleBoxLine> _themesSeparator;
-	[Export()] private ColorRect _header;
-	[Export()] private Label _headerLabel;
-	[Export()] private Label _latestVersionLabel;
-	[Export()] private Control _errorConsole;
+	[Export] private OptionButton _appModesButton;
+	[Export] private TextureRect _darkBg;
+	[Export] private TextureRect _lightBg;
+	[Export] private ColorRect _downloadWindowApp;
+	[Export] private CheckButton _enableLightTheme;
+	[Export] private Array<Theme> _themes;
+	[Export] private ColorRect _header;
+	[Export] private Label _headerLabel;
+	[Export] private Label _latestVersionLabel;
 
 	[ExportGroup("ModManager")]
-	[Export()] private ItemList _modList;
-	[Export()] private AnimatedSprite2D _modMangerLoadingSprite;
-	[Export()] private Label _modManagerLoadingLabel;
+	[Export] private ItemList _modList;
+	[Export] private AnimatedSprite2D _modManagerLoadingSprite;
+	[Export] private Label _modManagerLoadingLabel;
 
 
-	// Internal variables
 	private Theme _currentTheme;
-	private System.Collections.Generic.Dictionary<int, string> _providerIds = new();
+	private readonly System.Collections.Generic.Dictionary<int, string> _providerIds = new();
 	private SettingsResource Settings => Globals.Instance.Settings;
 
+	private static readonly Color DarkBarColor = new(0.16862745583057f, 0.1803921610117f, 0.18823529779911f);
+	private static readonly Color LightBarColor = new(0.74117648601532f, 0.76470589637756f, 0.78039216995239f);
 
-	// Godot functions
+
 	private void Initiate()
 	{
-		// Sets minimum window size and display mode.
 		DisplayServer.WindowSetMinSize(new Vector2I(1024, 576));
 		DisplayServer.WindowSetMode((DisplayServer.WindowMode)Settings.DisplayMode);
 
-		// Set the theme
 		SetTheme(Settings.LightModeEnabled);
 		PopulateModes();
 		SetMode(0, Settings.AppMode);
 
-		// Sets scaling (Called manually to hopefully fix #31
 		WindowResized();
 
-		// Signals
 		Resized += WindowResized;
 	}
 
 
-	// Custom functions
+	public override void _Ready()
+	{
+		// Globals is now an autoload singleton, so it no longer re-runs _Ready on scene
+		// reloads. The Home scene root does re-instantiate every reload, so it owns the
+		// deferred Initiate group kick for both the first launch and provider switches.
+		GetTree().CallDeferred("call_group", "Initiate", "Initiate");
+	}
+
+
 	private void SetTheme(bool enableLight)
 	{
 		_lightBg.Visible = enableLight;
 		_darkBg.Visible = !enableLight;
 		_currentTheme = enableLight ? _themes[1] : _themes[0];
-		_header.Color = enableLight ? new Godot.Color(0.74117648601532f, 0.76470589637756f, 0.78039216995239f) : new Godot.Color(0.16862745583057f, 0.1803921610117f, 0.18823529779911f);
-		_downloadWindowApp.Color = enableLight ? new Godot.Color(0.74117648601532f, 0.76470589637756f, 0.78039216995239f) : new Godot.Color(0.16862745583057f, 0.1803921610117f, 0.18823529779911f);
+		var barColor = enableLight ? LightBarColor : DarkBarColor;
+		_header.Color = barColor;
+		_downloadWindowApp.Color = barColor;
 		_enableLightTheme.ButtonPressed = enableLight;
 		Settings.LightModeEnabled = enableLight;
 		Globals.Instance.SaveManager.WriteSave(Settings);
@@ -87,7 +86,6 @@ public partial class Home : Control
 	private void SetMode(int newMode, string forcedMode = "")
 	{
 		string providerId;
-		// if manually setting a mode set it to that, otherwise for the button event updates use the indexed mode given
 		if (forcedMode != "")
 		{
 			providerId = Globals.Instance.ProviderRegistry.NormalizeProviderId(forcedMode);
@@ -114,25 +112,29 @@ public partial class Home : Control
 	private void ModeChanged(int newModeIndex)
 	{
 		SetMode(newModeIndex);
+		GetTree().ReloadCurrentScene();
 	}
-	
 
-	private void OpenConsole()
-	{
-		_errorConsole.Visible = !_errorConsole.Visible;
-	}
-	
-	
-	// Signal functions
+
 	private void WindowResized()
 	{
-		float scaleRatio = (((float)GetWindow().Size.X / 1920) + ((float)GetWindow().Size.Y / 1080)) / 2;
+		// Layout was authored at 1080p; scale fonts and icons proportionally for other window sizes.
+		const float referenceWidth = 1920f;
+		const float referenceHeight = 1080f;
+		const int loadingFontSize = 64;
+		const int headerFontSize = 49;
+		const int versionFontSize = 32;
+		const int defaultFontSize = 35;
+		const int minDefaultFont = 20;
+		const int maxDefaultFont = 50;
+
+		var scaleRatio = ((GetWindow().Size.X / referenceWidth) + (GetWindow().Size.Y / referenceHeight)) / 2;
 		_modList.IconScale = scaleRatio;
-		_modMangerLoadingSprite.Scale = new Vector2(scaleRatio, scaleRatio);
-		_modManagerLoadingLabel.AddThemeFontSizeOverride("font_size", (int)(scaleRatio * 64));
-		_headerLabel.AddThemeFontSizeOverride("font_size", (int)(scaleRatio * 49));
-		_latestVersionLabel.AddThemeFontSizeOverride("font_size", (int)(scaleRatio * 32));
-		_currentTheme.DefaultFontSize = Mathf.Clamp((int)(scaleRatio * 35), 20, 50);
+		_modManagerLoadingSprite.Scale = new Vector2(scaleRatio, scaleRatio);
+		_modManagerLoadingLabel.AddThemeFontSizeOverride("font_size", (int)(scaleRatio * loadingFontSize));
+		_headerLabel.AddThemeFontSizeOverride("font_size", (int)(scaleRatio * headerFontSize));
+		_latestVersionLabel.AddThemeFontSizeOverride("font_size", (int)(scaleRatio * versionFontSize));
+		_currentTheme.DefaultFontSize = Mathf.Clamp((int)(scaleRatio * defaultFontSize), minDefaultFont, maxDefaultFont);
 	}
 
 
@@ -140,5 +142,5 @@ public partial class Home : Control
 	{
 		GetTree().Quit();
 	}
-
 }
+

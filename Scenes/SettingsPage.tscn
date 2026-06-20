@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" path="res://Scripts/SettingsPage.cs" id="1_angmk"]
 
-[node name="Settings" type="Control" node_paths=PackedStringArray("_githubTokenLineEdit", "_getCompatibleVersionsButton", "_displayModeButton") groups=["Initiate"]]
+[node name="Settings" type="Control" node_paths=PackedStringArray("_displayModeButton") groups=["Initiate"]]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -10,8 +10,6 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_angmk")
-_githubTokenLineEdit = NodePath("SettingsContainer/GithubTokenLineEdit")
-_getCompatibleVersionsButton = NodePath("SettingsContainer/GetCompatibleVersions")
 _displayModeButton = NodePath("SettingsContainer/DisplayModeButton")
 metadata/_edit_use_anchors_ = true
 
@@ -42,26 +40,6 @@ text = "Reset installed mods:"
 [node name="ResetInstalledMods" type="Button" parent="SettingsContainer"]
 layout_mode = 2
 
-[node name="GithubTokenLabel" type="Label" parent="SettingsContainer"]
-layout_mode = 2
-text = "Github API token:"
-
-[node name="GithubTokenLineEdit" type="LineEdit" parent="SettingsContainer"]
-layout_mode = 2
-placeholder_text = "Enter Github token here:"
-
-[node name="GetCompatibleVersionsLabel" type="Label" parent="SettingsContainer"]
-layout_mode = 2
-text = "Get compatible:"
-
-[node name="GetCompatibleVersions" type="CheckBox" parent="SettingsContainer"]
-layout_mode = 2
-tooltip_text = "Enabled fetching of compatible versions via the Github API WARNING:WILL LIKELY CAUSE ANONYMOUS USERS TO EXCEED API LIMIT"
-text = "Enabled fetching of compatible versions via the Github API 
-WARNING:WILL LIKELY CAUSE ANANONYMOUS USERS TO EXCEED API LIMIT"
-flat = true
-text_overrun_behavior = 4
-
 [node name="DisplayModeLabel" type="Label" parent="SettingsContainer"]
 layout_mode = 2
 text = "Display mode:"
@@ -77,6 +55,4 @@ popup/item_1/id = 3
 
 [connection signal="pressed" from="SettingsContainer/ResetSettings" to="." method="ResetSettingsPressed"]
 [connection signal="pressed" from="SettingsContainer/ResetInstalledMods" to="." method="ResetInstalledModsPressed"]
-[connection signal="text_submitted" from="SettingsContainer/GithubTokenLineEdit" to="." method="GithubTokenEntered"]
-[connection signal="toggled" from="SettingsContainer/GetCompatibleVersions" to="." method="GetCompatibleToggled"]
 [connection signal="item_selected" from="SettingsContainer/DisplayModeButton" to="." method="SetDisplayMode"]

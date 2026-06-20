@@ -3,12 +3,11 @@
 [ext_resource type="Script" path="res://Scripts/ToolsPage.cs" id="1_1ei58"]
 [ext_resource type="Texture2D" uid="uid://e5vtrghoacs2" path="res://ImageAssets/WarningSign.png" id="1_pfmpv"]
 
-[node name="Tools" type="Control" node_paths=PackedStringArray("_clearInstallFolderButton", "_clearShadersToolButton", "_backupSavesButton", "_restoreSavesButton", "_fromSaveDirectoryButton", "_toSaveDirectoryButton") groups=["Initiate"]]
+[node name="Tools" type="Control" node_paths=PackedStringArray("_clearInstallFolderButton", "_backupSavesButton", "_restoreSavesButton", "_fromSaveDirectoryButton", "_toSaveDirectoryButton") groups=["Initiate"]]
 layout_mode = 3
 anchors_preset = 0
 script = ExtResource("1_1ei58")
 _clearInstallFolderButton = NodePath("Tools/ClearInstallFolderButton")
-_clearShadersToolButton = NodePath("")
 _backupSavesButton = NodePath("Tools/BackupSavesButton")
 _restoreSavesButton = NodePath("Tools/RestoreSavesButton")
 _fromSaveDirectoryButton = NodePath("Tools/SaveContainer/FromButton")

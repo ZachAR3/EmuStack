@@ -3,315 +3,190 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
-using System.Runtime.InteropServices;
-using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using Octokit;
 
-namespace EmuStack.Scripts.Modes;
 
 public abstract class Mode
 {
-    public abstract string Id { get; }
-    public abstract string Name { get; }
-    public abstract string DefaultExecutableName { get; }
+	public abstract string Id { get; }
+	public abstract string Name { get; }
+	public abstract string DefaultExecutableName { get; }
 
-    public virtual string LegacyName => Name;
-    public virtual string DefaultAppDataDirectoryName => Id;
-    public virtual string DefaultReleaseChannel => "stable";
-    public virtual bool SupportsCustomVersions => true;
+	public virtual string LegacyName => Name;
+	public virtual string DefaultAppDataDirectoryName => Id;
+	public virtual string DefaultReleaseChannel => "stable";
+	public virtual bool SupportsCustomVersions => true;
 
-    public abstract Task<List<ProviderRelease>> GetAvailableReleases(
-        GitHubClient gitHubClient,
-        HttpClient httpClient,
-        string os,
-        string releaseChannel);
+	public virtual IEnumerable<string> LegacyExecutableNames => Array.Empty<string>();
+	protected virtual IEnumerable<string> LinuxExecutableSuffixes => new[] { "" };
 
-    public virtual async Task<ProviderRelease> GetLatestRelease(
-        GitHubClient gitHubClient,
-        HttpClient httpClient,
-        string os,
-        string releaseChannel)
-    {
-        return (await GetAvailableReleases(gitHubClient, httpClient, os, releaseChannel)).FirstOrDefault();
-    }
+	public abstract Task<List<ProviderRelease>> GetAvailableReleases(
+		HttpClient httpClient,
+		OsKind os,
+		string releaseChannel);
 
-    public virtual async Task<ProviderRelease> GetRelease(
-        string version,
-        GitHubClient gitHubClient,
-        HttpClient httpClient,
-        string os,
-        string releaseChannel)
-    {
-        var releases = await GetAvailableReleases(gitHubClient, httpClient, os, releaseChannel);
-        var release = releases.FirstOrDefault(candidate =>
-            string.Equals(candidate.Version, version, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(candidate.DisplayName, version, StringComparison.OrdinalIgnoreCase));
+	public virtual async Task<ProviderRelease> GetLatestRelease(
+		HttpClient httpClient,
+		OsKind os,
+		string releaseChannel)
+	{
+		return (await GetAvailableReleases(httpClient, os, releaseChannel)).FirstOrDefault();
+	}
 
-        if (release != null)
-        {
-            return release;
-        }
+	public virtual async Task<ProviderRelease> GetRelease(
+		string version,
+		HttpClient httpClient,
+		OsKind os,
+		string releaseChannel)
+	{
+		var releases = await GetAvailableReleases(httpClient, os, releaseChannel);
+		var release = releases.FirstOrDefault(candidate =>
+			string.Equals(candidate.Version, version, StringComparison.OrdinalIgnoreCase) ||
+			string.Equals(candidate.DisplayName, version, StringComparison.OrdinalIgnoreCase));
 
-        return SupportsCustomVersions ? BuildCustomRelease(version, os, releaseChannel) : null;
-    }
+		if (release != null)
+		{
+			return release;
+		}
 
-    public virtual ProviderRelease BuildCustomRelease(string version, string os, string releaseChannel)
-    {
-        return null;
-    }
+		return SupportsCustomVersions ? BuildCustomRelease(version, os, releaseChannel) : null;
+	}
 
-    public virtual bool IsSingleFileDownload(string os)
-    {
-        return false;
-    }
+	public virtual ProviderRelease BuildCustomRelease(string version, OsKind os, string releaseChannel)
+	{
+		return null;
+	}
 
-    public virtual bool SupportsAutoUnpack(string os)
-    {
-        return !IsSingleFileDownload(os);
-    }
+	public virtual bool IsSingleFileDownload(OsKind os) => false;
 
-    public virtual string GetDownloadFileName(ProviderRelease release, string os, string executableName)
-    {
-        if (!string.IsNullOrEmpty(release.FileName))
-        {
-            return release.FileName;
-        }
+	public virtual bool SupportsAutoUnpack(OsKind os) => !IsSingleFileDownload(os);
 
-        return $"{GetSafeFileName(executableName)}-{GetSafeFileName(release.Version)}{GetArchiveExtension(os)}";
-    }
+	public virtual string GetDownloadFileName(ProviderRelease release, OsKind os, string executableName)
+	{
+		if (!string.IsNullOrEmpty(release.FileName))
+		{
+			return release.FileName;
+		}
 
-    public virtual string GetArchiveExtension(string os)
-    {
-        return os == "Windows" ? ".zip" : ".tar.gz";
-    }
+		return $"{GetSafeFileName(executableName)}-{GetSafeFileName(release.Version)}{GetArchiveExtension(os)}";
+	}
 
-    public virtual string GetDefaultInstallDirectory(string os)
-    {
-        return Path.Join(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            "EmuStack",
-            Id);
-    }
+	public virtual string GetArchiveExtension(OsKind os) => os == OsKind.Windows ? ".zip" : ".tar.gz";
 
-    public virtual string GetDefaultAppDataPath(string os)
-    {
-        var basePath = os == "Linux"
-            ? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
-            : Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+	public virtual string GetDefaultInstallDirectory(OsKind os)
+	{
+		return Path.Join(
+			Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+			"EmuStack",
+			Id);
+	}
 
-        return Path.Join(basePath, DefaultAppDataDirectoryName);
-    }
+	public virtual string GetDefaultAppDataPath(OsKind os)
+	{
+		var basePath = os == OsKind.Linux
+			? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
+			: Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
 
-    public virtual string GetDefaultModsLocation(string appDataPath)
-    {
-        return Path.Join(appDataPath, "load");
-    }
+		return Path.Join(basePath, DefaultAppDataDirectoryName);
+	}
 
-    public virtual string GetDefaultSavesLocation(string appDataPath)
-    {
-        return Path.Join(appDataPath, "nand", "user", "save");
-    }
+	public virtual string DesktopEntryComment => "Nintendo Switch video game console emulator";
+	public virtual string DesktopEntryCategories => "Game;Emulator;Qt;";
 
-    public virtual IEnumerable<string> GetExtractedDirectoriesToFlatten(ProviderRelease release, string os)
-    {
-        return Array.Empty<string>();
-    }
+	public virtual string GetDefaultModsLocation(string appDataPath) => Path.Join(appDataPath, "load");
 
-    public virtual IEnumerable<string> GetExecutableCandidates(string os, string executableName)
-    {
-        if (os == "Windows")
-        {
-            return new[]
-            {
-                $"{executableName}.exe",
-                $"{DefaultExecutableName}.exe",
-                $"{Name}.exe"
-            };
-        }
+	public virtual string GetDefaultSavesLocation(string appDataPath) => Path.Join(appDataPath, "nand", "user", "save");
 
-        if (os == "Linux")
-        {
-            return new[]
-            {
-                executableName,
-                DefaultExecutableName,
-                Name,
-                $"{executableName}.AppImage",
-                $"{DefaultExecutableName}.AppImage",
-                $"{Name}.AppImage"
-            };
-        }
+	public virtual IEnumerable<string> GetExtractedDirectoriesToFlatten(ProviderRelease release, OsKind os)
+		=> Array.Empty<string>();
 
-        return new[]
-        {
-            $"{executableName}.app",
-            $"{DefaultExecutableName}.app",
-            $"{Name}.app"
-        };
-    }
 
-    public virtual string FindExecutable(string installDirectory, string os, string executableName)
-    {
-        if (!Directory.Exists(installDirectory))
-        {
-            return "";
-        }
+	public virtual IEnumerable<string> GetExecutableCandidates(OsKind os, string executableName)
+	{
+		var names = new[] { executableName, DefaultExecutableName, Name }
+			.Concat(LegacyExecutableNames)
+			.Where(name => !string.IsNullOrEmpty(name))
+			.Distinct(StringComparer.OrdinalIgnoreCase)
+			.ToList();
 
-        var candidates = GetExecutableCandidates(os, executableName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        foreach (var candidate in candidates)
-        {
-            var directPath = Path.Join(installDirectory, candidate);
-            if (File.Exists(directPath) || Directory.Exists(directPath))
-            {
-                return directPath;
-            }
-        }
+		return os switch
+		{
+			OsKind.Windows => names.Select(name => $"{name}.exe"),
+			OsKind.MacOS => names.Select(name => $"{name}.app"),
+			_ => names.SelectMany(name => LinuxExecutableSuffixes.Select(suffix => name + suffix)),
+		};
+	}
 
-        foreach (var file in Directory.GetFiles(installDirectory, "*", SearchOption.AllDirectories))
-        {
-            if (candidates.Any(candidate => string.Equals(Path.GetFileName(file), candidate, StringComparison.OrdinalIgnoreCase)))
-            {
-                return file;
-            }
-        }
 
-        return "";
-    }
+	public virtual string FindExecutable(string installDirectory, OsKind os, string executableName)
+	{
+		if (!Directory.Exists(installDirectory))
+		{
+			return "";
+		}
 
-    protected static string GetSafeFileName(string value)
-    {
-        var safeName = value;
-        foreach (var invalidChar in Path.GetInvalidFileNameChars())
-        {
-            safeName = safeName.Replace(invalidChar, '-');
-        }
+		var candidates = GetExecutableCandidates(os, executableName)
+			.Distinct(StringComparer.OrdinalIgnoreCase)
+			.ToList();
 
-        return safeName;
-    }
+		foreach (var candidate in candidates)
+		{
+			var directPath = Path.Join(installDirectory, candidate);
+			if (File.Exists(directPath) || Directory.Exists(directPath))
+			{
+				return directPath;
+			}
+		}
 
-    protected static string NormalizeVersion(string version)
-    {
-        return version?.Trim().TrimStart('v') ?? "";
-    }
+		// Cap recursion: scanning an entire user-pointed directory tree would be brutal
+		// if the user picks the wrong folder. Three levels covers normal release archives.
+		return SearchExecutable(installDirectory, candidates, depthRemaining: 3);
+	}
 
-    protected static string GetRyubingOsToken(string os)
-    {
-        return os switch
-        {
-            "Windows" => "windows",
-            "Linux" => "linux",
-            _ => "macos"
-        };
-    }
 
-    protected static string GetArchitectureToken()
-    {
-        return RuntimeInformation.ProcessArchitecture switch
-        {
-            Architecture.Arm64 => "arm64",
-            Architecture.X86 => "x86",
-            _ => "x64"
-        };
-    }
+	private static string SearchExecutable(string directory, IReadOnlyCollection<string> candidates, int depthRemaining)
+	{
+		if (depthRemaining < 0)
+		{
+			return "";
+		}
 
-    protected static List<ProviderRelease> BuildGitHubReleaseList(
-        IReadOnlyList<Release> releases,
-        Func<Release, ReleaseAsset> selectAsset)
-    {
-        var providerReleases = new List<ProviderRelease>();
+		foreach (var file in Directory.GetFiles(directory))
+		{
+			if (candidates.Any(candidate => string.Equals(Path.GetFileName(file), candidate, StringComparison.OrdinalIgnoreCase)))
+			{
+				return file;
+			}
+		}
 
-        foreach (var release in releases)
-        {
-            var asset = selectAsset(release);
-            if (asset == null)
-            {
-                continue;
-            }
+		foreach (var subDirectory in Directory.GetDirectories(directory))
+		{
+			if (candidates.Any(candidate => string.Equals(Path.GetFileName(subDirectory), candidate, StringComparison.OrdinalIgnoreCase)))
+			{
+				return subDirectory;
+			}
 
-            providerReleases.Add(new ProviderRelease
-            {
-                Version = NormalizeVersion(release.TagName),
-                DisplayName = string.IsNullOrEmpty(release.Name) ? release.TagName : release.Name,
-                DownloadUrl = asset.BrowserDownloadUrl,
-                FileName = asset.Name,
-                IsPrerelease = release.Prerelease
-            });
-        }
+			var match = SearchExecutable(subDirectory, candidates, depthRemaining - 1);
+			if (!string.IsNullOrEmpty(match))
+			{
+				return match;
+			}
+		}
 
-        return providerReleases;
-    }
+		return "";
+	}
 
-    protected static ReleaseAsset SelectBestGitHubAsset(Release release, string os, params string[] preferredTerms)
-    {
-        var assets = release.Assets
-            .Where(asset => IsDownloadableAsset(asset.Name))
-            .Select(asset => new
-            {
-                Asset = asset,
-                Score = ScoreAsset(asset.Name, os, preferredTerms)
-            })
-            .Where(asset => asset.Score > 0)
-            .OrderByDescending(asset => asset.Score)
-            .FirstOrDefault();
 
-        return assets?.Asset;
-    }
+	protected static string GetSafeFileName(string value)
+	{
+		var safeName = value;
+		foreach (var invalidChar in Path.GetInvalidFileNameChars())
+		{
+			safeName = safeName.Replace(invalidChar, '-');
+		}
 
-    private static bool IsDownloadableAsset(string assetName)
-    {
-        var name = assetName.ToLowerInvariant();
-        return !name.EndsWith(".sha256") &&
-               !name.EndsWith(".sha256sum") &&
-               !name.EndsWith(".sig") &&
-               !name.EndsWith(".json") &&
-               !name.Contains("source") &&
-               (name.EndsWith(".zip") ||
-                name.EndsWith(".7z") ||
-                name.EndsWith(".tar.gz") ||
-                name.EndsWith(".appimage") ||
-                name.EndsWith(".dmg"));
-    }
+		return safeName;
+	}
 
-    private static int ScoreAsset(string assetName, string os, IEnumerable<string> preferredTerms)
-    {
-        var name = assetName.ToLowerInvariant();
-        var score = 0;
-
-        foreach (var term in preferredTerms)
-        {
-            if (!string.IsNullOrEmpty(term) && name.Contains(term.ToLowerInvariant()))
-            {
-                score += 10;
-            }
-        }
-
-        if (os == "Windows" && (name.Contains("windows") || Regex.IsMatch(name, @"(^|[-_.])win")))
-        {
-            score += 30;
-        }
-        else if (os == "Linux" && (name.Contains("linux") || name.EndsWith(".appimage")))
-        {
-            score += 30;
-        }
-        else if (os == "macOS" && (name.Contains("macos") || name.Contains("darwin") || name.Contains("osx")))
-        {
-            score += 30;
-        }
-
-        if (name.EndsWith(".appimage") && os == "Linux")
-        {
-            score += 8;
-        }
-        else if (name.EndsWith(".zip") && os == "Windows")
-        {
-            score += 5;
-        }
-        else if (name.EndsWith(".tar.gz") && os != "Windows")
-        {
-            score += 4;
-        }
-
-        return score;
-    }
+	protected static string NormalizeVersion(string version) => version?.Trim().TrimStart('v') ?? "";
 }

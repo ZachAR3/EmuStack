@@ -1,43 +1,43 @@
 using Godot;
-using System.IO;
 using System.Linq;
-using Octokit;
-using EmuStack.Scripts.Modes;
+using HttpClient = System.Net.Http.HttpClient;
 using Node = Godot.Node;
+
 
 public partial class Globals : Node
 {
-	//private static Globals _instance;
 	public static Globals Instance;
 
 	public ProviderRegistry ProviderRegistry = new();
 	public Mode AppMode;
 	public ResourceSaveManager SaveManager = new();
 	public SettingsResource Settings = new();
-	
-	public readonly GitHubClient LocalGithubClient = new(new ProductHeaderValue("EmuStack"));
-	//public string DllsDirectory;
+
+	public readonly HttpClient HttpClient = new();
+
 
 	public override void _Ready()
 	{
 		Instance = this;
-		SaveManager.Version = 2.4f;
+		HttpClient.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "EmuStack/1.0");
+		SaveManager.Version = 4;
 		Settings = SaveManager.GetSettings();
-		SetAppMode(Settings.AppMode, false);
-		MigrateLegacySettings();
-		SetDefaultPaths();
-		if (!string.IsNullOrEmpty(Settings.GithubApiToken))
-		{
-			AuthenticateGithubClient();
-		}
-		
-		// Get launch options and update settings accordingly.
-		var launchOptions = OS.GetCmdlineArgs();
-		Settings.LauncherMode = launchOptions.Contains("--launcher");
-		SaveManager.WriteSave();
 
-		GetTree().CallDeferred("call_group", "Initiate", "Initiate");
+		// Resolve the active provider first so legacy fields migrate into the right
+		// provider before defaults are applied — otherwise the migration's empty-check
+		// sees freshly defaulted values and skips.
+		AppMode = ProviderRegistry.Get(Settings.AppMode);
+		Settings.AppMode = AppMode.Id;
+		MigrateLegacySettings(CurrentProviderSettings);
+		SetDefaultPaths();
+
+		Settings.LauncherMode = OS.GetCmdlineArgs().Contains("--launcher");
+		SaveManager.WriteSave();
 	}
+
+
+	public ProviderSettingsResource CurrentProviderSettings => Settings.GetProviderSettings(AppMode.Id);
+
 
 	public void SetDefaultPaths()
 	{
@@ -46,20 +46,16 @@ public partial class Globals : Node
 			ApplyProviderDefaults(provider, Settings.GetProviderSettings(provider.Id));
 		}
 
-		SyncLegacySettings(CurrentProviderSettings);
 		SaveManager.WriteSave(Settings);
 	}
-
-
-	public ProviderSettingsResource CurrentProviderSettings => Settings.GetProviderSettings(AppMode.Id);
 
 
 	public void SetAppMode(string providerId, bool persist = true)
 	{
 		AppMode = ProviderRegistry.Get(providerId);
 		Settings.AppMode = AppMode.Id;
+		MigrateLegacySettings(CurrentProviderSettings);
 		ApplyProviderDefaults(AppMode, CurrentProviderSettings);
-		SyncLegacySettings(CurrentProviderSettings);
 		if (persist)
 		{
 			SaveManager.WriteSave(Settings);
@@ -67,36 +63,14 @@ public partial class Globals : Node
 	}
 
 
-	public void SyncLegacySettings(ProviderSettingsResource providerSettings)
-	{
-		Settings.SaveDirectory = providerSettings.SaveDirectory;
-		Settings.ExecutablePath = providerSettings.ExecutablePath;
-		Settings.FromSaveDirectory = providerSettings.FromSaveDirectory;
-		Settings.ToSaveDirectory = providerSettings.ToSaveDirectory;
-		Settings.ModsLocation = providerSettings.ModsLocation;
-		Settings.AppDataPath = providerSettings.AppDataPath;
-		Settings.InstalledVersion = Tools.TryToVersionInt(providerSettings.InstalledVersion, out var legacyVersion)
-			? legacyVersion
-			: -1;
-	}
-
-
 	public void SyncCurrentProviderSettings()
 	{
-		SyncLegacySettings(CurrentProviderSettings);
 		SaveManager.WriteSave(Settings);
 	}
 
 
-	public void AuthenticateGithubClient()
+	private void MigrateLegacySettings(ProviderSettingsResource providerSettings)
 	{
-		LocalGithubClient.Credentials = new Credentials(Settings.GithubApiToken);
-	}
-
-
-	private void MigrateLegacySettings()
-	{
-		var providerSettings = CurrentProviderSettings;
 		if (!string.IsNullOrEmpty(providerSettings.SaveDirectory) ||
 		    !string.IsNullOrEmpty(providerSettings.ExecutablePath) ||
 		    !string.IsNullOrEmpty(providerSettings.AppDataPath))
@@ -111,14 +85,14 @@ public partial class Globals : Node
 		providerSettings.FromSaveDirectory = Settings.FromSaveDirectory ?? "";
 		providerSettings.ToSaveDirectory = Settings.ToSaveDirectory ?? "";
 		providerSettings.InstalledVersion = Settings.InstalledVersion >= 0
-			? GetLegacyVersionString(Settings.InstalledVersion, AppMode)
+			? LegacyVersion.FromInt(Settings.InstalledVersion)
 			: "";
 	}
 
 
-	private void ApplyProviderDefaults(Mode provider, ProviderSettingsResource providerSettings)
+	private static void ApplyProviderDefaults(Mode provider, ProviderSettingsResource providerSettings)
 	{
-		var osName = OS.GetName();
+		var os = Os.Current;
 
 		if (string.IsNullOrEmpty(providerSettings.ReleaseChannel))
 		{
@@ -132,12 +106,12 @@ public partial class Globals : Node
 
 		if (string.IsNullOrEmpty(providerSettings.SaveDirectory))
 		{
-			providerSettings.SaveDirectory = provider.GetDefaultInstallDirectory(osName);
+			providerSettings.SaveDirectory = provider.GetDefaultInstallDirectory(os);
 		}
 
 		if (string.IsNullOrEmpty(providerSettings.AppDataPath))
 		{
-			providerSettings.AppDataPath = provider.GetDefaultAppDataPath(osName);
+			providerSettings.AppDataPath = provider.GetDefaultAppDataPath(os);
 		}
 
 		if (string.IsNullOrEmpty(providerSettings.ModsLocation))
@@ -150,11 +124,4 @@ public partial class Globals : Node
 			providerSettings.FromSaveDirectory = provider.GetDefaultSavesLocation(providerSettings.AppDataPath);
 		}
 	}
-
-
-	private static string GetLegacyVersionString(int installedVersion, Mode provider)
-	{
-		return provider.Id == "yuzu" ? installedVersion.ToString() : Tools.FromInt(installedVersion);
-	}
-
 }

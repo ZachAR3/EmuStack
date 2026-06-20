@@ -1,10 +1,8 @@
-[gd_scene load_steps=20 format=3 uid="uid://c7wdbnvnydnxk"]
+[gd_scene load_steps=17 format=3 uid="uid://c7wdbnvnydnxk"]
 
 [ext_resource type="Theme" uid="uid://cnnid0n04kfr7" path="res://Themes/DarkTheme.tres" id="1_c22a4"]
 [ext_resource type="Script" path="res://Scripts/Home.cs" id="1_p51ic"]
 [ext_resource type="Theme" uid="uid://dky537toysr34" path="res://Themes/LightTheme.tres" id="3_a1ctt"]
-[ext_resource type="StyleBox" uid="uid://tcrn2c2voh4i" path="res://Themes/Styleboxes/DarkVSeparator.tres" id="5_qxukt"]
-[ext_resource type="StyleBox" uid="uid://ct4a4b2lcwimn" path="res://Themes/Styleboxes/LightVSeparator.tres" id="7_iauax"]
 [ext_resource type="FontFile" uid="uid://bs747wsxnk330" path="res://Fonts/Primary.TTF" id="7_jk62c"]
 [ext_resource type="Texture2D" uid="uid://d0oddknmnkwg" path="res://ImageAssets/Icon.svg" id="7_l0a5h"]
 [ext_resource type="PackedScene" uid="uid://cr3wosequvma8" path="res://Scenes/InstallerPage.tscn" id="10_7mm46"]
@@ -13,7 +11,6 @@
 [ext_resource type="PackedScene" uid="uid://bdihe2bmwmgtp" path="res://Scenes/ModManagerPage.tscn" id="12_3uycp"]
 [ext_resource type="Script" path="res://Scripts/Tools.cs" id="13_s0bjf"]
 [ext_resource type="PackedScene" uid="uid://b52pqn56qpbg2" path="res://Scenes/ErrorConsole.tscn" id="14_1b731"]
-[ext_resource type="Script" path="res://Scripts/Globals.cs" id="15_p1cux"]
 
 [sub_resource type="Gradient" id="Gradient_awkjf"]
 interpolation_mode = 2
@@ -39,7 +36,7 @@ border_width_right = 3
 border_width_bottom = 3
 border_color = Color(0.8, 0.8, 0.8, 0)
 
-[node name="Home" type="Control" node_paths=PackedStringArray("_appModesButton", "_darkBg", "_lightBg", "_downloadWindowApp", "_enableLightTheme", "_header", "_headerLabel", "_latestVersionLabel", "_errorConsole", "_modList", "_modMangerLoadingSprite", "_modManagerLoadingLabel") groups=["Initiate"]]
+[node name="Home" type="Control" node_paths=PackedStringArray("_appModesButton", "_darkBg", "_lightBg", "_downloadWindowApp", "_enableLightTheme", "_header", "_headerLabel", "_latestVersionLabel", "_modList", "_modManagerLoadingSprite", "_modManagerLoadingLabel") groups=["Initiate"]]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -50,20 +47,17 @@ size_flags_horizontal = 4
 size_flags_vertical = 4
 theme = ExtResource("1_c22a4")
 script = ExtResource("1_p51ic")
-_appVersion = 3.5
 _appModesButton = NodePath("Header/Option/OptionButton")
 _darkBg = NodePath("DarkBG")
 _lightBg = NodePath("LightBG")
 _downloadWindowApp = NodePath("Pages/Installer/DownloadWindow/Window")
 _enableLightTheme = NodePath("Header/Option/LightMode")
 _themes = Array[Theme]([ExtResource("1_c22a4"), ExtResource("3_a1ctt")])
-_themesSeparator = Array[StyleBoxLine]([ExtResource("5_qxukt"), ExtResource("7_iauax")])
 _header = NodePath("Header")
 _headerLabel = NodePath("Header/HeaderLabels/HeaderLabel")
-_latestVersionLabel = NodePath("Header/HeaderLabels/LastestVersion")
-_errorConsole = NodePath("ErrorConsole")
-_modList = NodePath("Pages/ModManager/ModsList")
-_modMangerLoadingSprite = NodePath("Pages/ModManager/LoadingWindow/LoadingBarControl/LoadingBarSprite")
+_latestVersionLabel = NodePath("Header/HeaderLabels/LatestVersion")
+_modList = NodePath("Pages/ModManager/MainLayout/ContentRow/ModsList")
+_modManagerLoadingSprite = NodePath("Pages/ModManager/LoadingWindow/LoadingBarControl/LoadingBarSprite")
 _modManagerLoadingLabel = NodePath("Pages/ModManager/LoadingWindow/LoadingBarControl/LoadingLabelBox")
 metadata/_edit_use_anchors_ = true
 
@@ -130,7 +124,7 @@ vertical_alignment = 3
 [node name="VSeparator" type="VSeparator" parent="Header/HeaderLabels"]
 layout_mode = 2
 
-[node name="LastestVersion" type="Label" parent="Header/HeaderLabels"]
+[node name="LatestVersion" type="Label" parent="Header/HeaderLabels"]
 layout_mode = 2
 theme_override_fonts/font = ExtResource("7_jk62c")
 theme_override_font_sizes/font_size = 32
@@ -152,14 +146,6 @@ metadata/_edit_use_anchors_ = true
 
 [node name="OptionButton" type="OptionButton" parent="Header/Option"]
 layout_mode = 2
-item_count = 3
-selected = 1
-popup/item_0/text = "Eden"
-popup/item_0/id = 0
-popup/item_1/text = "Ryubing"
-popup/item_1/id = 1
-popup/item_2/text = "Yuzu"
-popup/item_2/id = 2
 
 [node name="LightMode" type="CheckButton" parent="Header/Option"]
 layout_mode = 2
@@ -196,7 +182,7 @@ metadata/_edit_use_anchors_ = true
 
 [node name="Installer" parent="Pages" node_paths=PackedStringArray("_latestVersionLabel", "_customVersionLineEdit") instance=ExtResource("10_7mm46")]
 layout_mode = 2
-_latestVersionLabel = NodePath("../../Header/HeaderLabels/LastestVersion")
+_latestVersionLabel = NodePath("../../Header/HeaderLabels/LatestVersion")
 _customVersionLineEdit = NodePath("ControlsContainer/CustomVersion/CustomVersionLineEdit")
 
 [node name="Tools" parent="Pages" instance=ExtResource("11_27f86")]
@@ -242,23 +228,20 @@ bbcode_enabled = true
 text = "[color=#ff0000]Error encountered, press TAB for more info"
 metadata/_edit_use_anchors_ = true
 
-[node name="Tools" type="Node" parent="." node_paths=PackedStringArray("_errorConsoleContainer", "_errorConsole", "_errorNotifier", "_confirmationPopup")]
+[node name="ToolsService" type="Node" parent="." node_paths=PackedStringArray("_errorConsoleContainer", "_errorConsole", "_errorNotifier", "_confirmationPopup")]
 script = ExtResource("13_s0bjf")
 _errorConsoleContainer = NodePath("../ErrorConsole")
 _errorConsole = NodePath("../ErrorConsole/ErrorConsole")
 _errorNotifier = NodePath("../ErrorNotifier")
 _confirmationPopup = NodePath("../ConfirmPopup")
 
-[node name="Globals" type="Node" parent="."]
-script = ExtResource("15_p1cux")
-
 [node name="AudioStreamPlayer" type="AudioStreamPlayer" parent="."]
 
 [connection signal="item_selected" from="Header/Option/OptionButton" to="." method="ModeChanged"]
 [connection signal="toggled" from="Header/Option/LightMode" to="." method="SetTheme"]
 [connection signal="pressed" from="Header/Option/QuitButton" to="." method="ExitButtonPressed"]
-[connection signal="pressed" from="Header/OpenConsole" to="Tools" method="ToggleConsole"]
-[connection signal="pressed" from="ErrorConsole/ErrorConsole/CloseButton" to="Tools" method="ToggleConsole"]
+[connection signal="pressed" from="Header/OpenConsole" to="ToolsService" method="ToggleConsole"]
+[connection signal="pressed" from="ErrorConsole/ErrorConsole/CloseButton" to="ToolsService" method="ToggleConsole"]
 
 [editable path="Pages/Installer"]
 [editable path="Pages/ModManager"]

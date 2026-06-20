@@ -1,94 +1,201 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
-using Godot;
 using Newtonsoft.Json.Linq;
 using HttpClient = System.Net.Http.HttpClient;
 
 public class BananaManager
 {
-	private readonly HttpClient _httpClient = new();
-	
-	
-	public async Task<Dictionary<string, List<Mod>>> GetAvailableMods(Dictionary<string, List<Mod>> modList, Dictionary<string, Game> installedGames, string gameId, int sourceId, int page = 1)
+	private const string ApiBase = "https://gamebanana.com/apiv11";
+
+	private readonly HttpClient _httpClient;
+	private readonly Dictionary<string, int> _gameIdCache = new();
+
+
+	public BananaManager(HttpClient httpClient)
 	{
-		if (!modList.ContainsKey(gameId))
+		_httpClient = httpClient;
+	}
+
+
+	public async Task<List<Mod>> GetAvailableMods(string gameId, Dictionary<string, string> installedGames, int sourceId, int page)
+	{
+		if (!installedGames.TryGetValue(gameId, out var gameName))
 		{
-			modList[gameId] = new List<Mod>();
+			return new List<Mod>();
 		}
-		
-		int bananaGameId = await GetGameBananaGameId(installedGames[gameId].GameName);
+
+		var bananaGameId = await ResolveGameBananaGameId(gameName);
 		if (bananaGameId == -1)
 		{
-			return modList;
-		}
-		
-		var gameModsSource = await _httpClient
-			.GetAsync($@"https://gamebanana.com/apiv11/Game/{bananaGameId}/Subfeed?_nPage={page}");
-		if (!gameModsSource.IsSuccessStatusCode)
-		{
-			return modList;
+			Tools.Instance.AddError($"Could not find '{gameName}' on GameBanana. Mods for this title will be unavailable.");
+			return new List<Mod>();
 		}
 
-		var jsonMods = JObject.Parse(await gameModsSource.Content.ReadAsStringAsync());
-		var records = jsonMods["_aRecords"];
+		return await FetchMods(bananaGameId, sourceId, page, searchQuery: null);
+	}
+
+
+	public async Task<List<Mod>> SearchMods(string gameId, Dictionary<string, string> installedGames, int sourceId, string query)
+	{
+		if (!installedGames.TryGetValue(gameId, out var gameName))
+		{
+			return new List<Mod>();
+		}
+
+		var bananaGameId = await ResolveGameBananaGameId(gameName);
+		if (bananaGameId == -1)
+		{
+			return new List<Mod>();
+		}
+
+		return await FetchMods(bananaGameId, sourceId, page: 1, searchQuery: query);
+	}
+
+
+	private async Task<List<Mod>> FetchMods(int bananaGameId, int sourceId, int page, string searchQuery)
+	{
+		var url = $"{ApiBase}/Game/{bananaGameId}/Subfeed?_nPage={page}";
+		if (!string.IsNullOrEmpty(searchQuery))
+		{
+			url += $"&_sName={Uri.EscapeDataString(searchQuery)}";
+		}
+
+		var response = await _httpClient.GetAsync(url);
+		if (!response.IsSuccessStatusCode)
+		{
+			return new List<Mod>();
+		}
+
+		var json = JObject.Parse(await response.Content.ReadAsStringAsync());
+		var records = json["_aRecords"] as JArray;
 		if (records == null)
 		{
-			return modList;
+			return new List<Mod>();
 		}
 
-
-		foreach (var mod in records)
+		var mods = new List<Mod>();
+		foreach (var record in records)
 		{
-			var filesResponse = await _httpClient.GetAsync($@"https://gamebanana.com/apiv11/Mod/{mod["_idRow"]}/Files");
-			if (!filesResponse.IsSuccessStatusCode)
+			// The Subfeed endpoint returns mixed types (Mods, Wips, Questions, Tools,
+			// Requests, Tutorials). Only Mods with downloadable files are installable.
+			if (record["_sModelName"]?.ToString() != "Mod")
 			{
 				continue;
 			}
 
-			string modPage = await filesResponse.Content.ReadAsStringAsync();
-			var modPageContent = JToken.Parse(modPage);
-			string downloadUrl = modPageContent[0]?["_sDownloadUrl"]?.ToString();
-			if (string.IsNullOrEmpty(downloadUrl))
+			if (record["_bHasFiles"]?.Value<bool>() != true)
 			{
 				continue;
 			}
-			
-			// If there is an available compatible version sets it as that, otherwises sets it as NA
-			List<string> compatibleVersions = mod["_sVersion"] == null
-				? new List<string>() { "NA" }
-				: new List<string>() { mod["_sVersion"].ToString() };
-			
-			modList[gameId].Add(new Mod
+
+			var mod = await ParseModRecord(record, sourceId);
+			if (mod != null)
 			{
-				ModName = mod["_sName"].ToString(), 
-				ModUrl = downloadUrl, 
-				CompatibleVersions = compatibleVersions, 
-				Source = sourceId, 
-				InstalledPath = null
-			});
+				mods.Add(mod);
+			}
 		}
 
-		return modList;
+		return mods;
 	}
-	
-	 
-	private async Task<int> GetGameBananaGameId(string gameName)
+
+
+	private async Task<Mod> ParseModRecord(JToken record, int sourceId)
 	{
-		// Searches for the game ID using the name from banana mods
-		var searchResponse = await _httpClient.GetAsync("https://gamebanana.com/apiv11/Util/Game/NameMatch?_sName=" + gameName);
-		if (!searchResponse.IsSuccessStatusCode)
+		var modId = record["_idRow"]?.ToString() ?? "";
+		var modName = record["_sName"]?.ToString() ?? "";
+
+		// Fetch the download URL from the files endpoint. A mod may have multiple
+		// files (variants); take the first one — EmuStack installs the mod as a
+		// single archive.
+		var filesResponse = await _httpClient.GetAsync($"{ApiBase}/Mod/{modId}/Files");
+		if (!filesResponse.IsSuccessStatusCode)
+		{
+			return null;
+		}
+
+		var filesJson = JToken.Parse(await filesResponse.Content.ReadAsStringAsync());
+		var firstFile = filesJson?.FirstOrDefault();
+		var downloadUrl = firstFile?["_sDownloadUrl"]?.ToString();
+		if (string.IsNullOrEmpty(downloadUrl))
+		{
+			return null;
+		}
+
+		// Compatible game versions are in _aTags as "Game Version: Version X.Y.Z".
+		// The _sVersion field is the mod's own version, NOT game compatibility.
+		var compatibleVersions = ParseCompatibleVersions(record["_aTags"]);
+
+		return new Mod
+		{
+			ModId = modId,
+			ModName = modName,
+			ModUrl = downloadUrl,
+			CompatibleVersions = compatibleVersions,
+			Source = sourceId,
+		};
+	}
+
+
+	private static List<string> ParseCompatibleVersions(JToken tags)
+	{
+		if (tags == null)
+		{
+			return new List<string> { "NA" };
+		}
+
+		var versions = new List<string>();
+		foreach (var tag in tags)
+		{
+			var tagStr = tag.ToString();
+			const string prefix = "Game Version: ";
+			if (tagStr.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+			{
+				var version = tagStr[prefix.Length..].Trim();
+				// Strip a leading "Version " if the tag uses the long form.
+				const string versionPrefix = "Version ";
+				if (version.StartsWith(versionPrefix, StringComparison.OrdinalIgnoreCase))
+				{
+					version = version[versionPrefix.Length..];
+				}
+
+				versions.Add(version);
+			}
+		}
+
+		return versions.Count > 0 ? versions : new List<string> { "NA" };
+	}
+
+
+	private async Task<int> ResolveGameBananaGameId(string gameName)
+	{
+		if (_gameIdCache.TryGetValue(gameName, out var cachedId))
+		{
+			return cachedId;
+		}
+
+		var response = await _httpClient.GetAsync($"{ApiBase}/Util/Game/NameMatch?_sName={Uri.EscapeDataString(gameName)}");
+		if (!response.IsSuccessStatusCode)
 		{
 			return -1;
 		}
 
-		string searchContent = await searchResponse.Content.ReadAsStringAsync();
-		
-		var jsonContent = JObject.Parse($@"{searchContent}");
-		var modId = jsonContent["_aRecords"]?[0]?["_idRow"]!.ToString();
+		var json = JObject.Parse(await response.Content.ReadAsStringAsync());
+		var records = json["_aRecords"] as JArray;
+		if (records == null || records.Count == 0)
+		{
+			return -1;
+		}
 
-		// If the return is null replace with our version (-1)
-		int returnValue = modId == null ? -1 : int.Parse(modId);
-		return returnValue;
+		var modId = records[0]?["_idRow"]?.ToString();
+		var id = int.TryParse(modId, out var parsedId) ? parsedId : -1;
+
+		if (id != -1)
+		{
+			_gameIdCache[gameName] = id;
+		}
+
+		return id;
 	}
 }

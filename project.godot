@@ -8,16 +8,24 @@
 
 config_version=5
 
+[animation]
+
+compatibility/default_parent_skeleton_in_mesh_instance_3d=true
+
 [application]
 
 config/name="EmuStack"
 run/main_scene="res://Scenes/Home.tscn"
-config/features=PackedStringArray("4.2", "C#", "Forward Plus")
+config/features=PackedStringArray("4.6", "C#", "Forward Plus")
 boot_splash/bg_color=Color(0.0431373, 0.0470588, 0.0509804, 1)
-boot_splash/image="res://ImageAssets/SplashScreen.svg"
-boot_splash/fullsize=false
+boot_splash/stretch_mode=0
+boot_splash/image="res://ImageAssets/SplashScreen.png"
 config/icon="res://ImageAssets/Icon.svg"
 boot_splash/minimum_display_time=3000
+
+[autoload]
+
+Globals="*res://Scripts/Globals.cs"
 
 [display]
 
@@ -33,7 +41,7 @@ project/assembly_name="EmuStack"
 
 OpenConsole={
 "deadzone": 0.5,
-"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":4194306,"key_label":0,"unicode":0,"echo":false,"script":null)
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":4194306,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
 ]
 }
 

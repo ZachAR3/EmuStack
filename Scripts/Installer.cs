@@ -1,31 +1,21 @@
 using Godot;
 using System;
-using System.Diagnostics;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net.Http;
-using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Mono.Unix;
-using NativeFileDialogSharp;
-using Octokit;
-using WindowsShortcutFactory;
-using EmuStack.Scripts.Modes;
-using Label = Godot.Label;
 using SharpCompress.Common;
 using SharpCompress.Readers;
+using Label = Godot.Label;
 
 
 public partial class Installer : Control
 {
-	// Exported variables (Primarily for the UI / Interactions)
 	[ExportGroup("General")]
 	[Export] private Label _latestVersionLabel;
 
 	[ExportGroup("Installer")]
-	[Export] private string _titlesKeySite;
-	[Export] private int _versionsPerPage = 10;
 	[Export] private Image _icon;
 	[Export] private OptionButton _versionButton;
 	[Export] private CheckBox _createShortcutButton;
@@ -44,28 +34,24 @@ public partial class Installer : Control
 	[Export] private TextureRect _extractWarning;
 	[Export] private TextureRect _downloadWarning;
 
-	// Internal variables
-	private String _osUsed = OS.GetName();
-	// private string _yuzuExtensionString;
+	private readonly OsKind _os = Os.Current;
 	private string _executableName;
 	private string _downloadFileName;
 	private ProviderRelease _latestRelease;
 	private ProviderRelease _activeDownloadRelease;
 	private List<ProviderRelease> _availableReleases = new();
 	private bool _autoUpdate;
+
 	private Mode AppMode => Globals.Instance.AppMode;
 	private SettingsResource Settings => Globals.Instance.Settings;
 	private ProviderSettingsResource ProviderSettings => Globals.Instance.CurrentProviderSettings;
-	
-	private readonly System.Net.Http.HttpClient _httpClient = new();
 
 
-	// Godot functions
 	private void Initiate()
 	{
-		_httpClient.DefaultRequestHeaders.Add("User-Agent", "EmuStack");
-		_createShortcutButton.Disabled = _osUsed == "Windows";
-		_autoUnpackButton.Disabled = !AppMode.SupportsAutoUnpack(_osUsed);
+		_createShortcutButton.Disabled = _os == OsKind.Windows;
+		_autoUpdateButton.Disabled = !_createShortcutButton.ButtonPressed;
+		_autoUnpackButton.Disabled = !AppMode.SupportsAutoUnpack(_os);
 
 		_executableName = string.IsNullOrEmpty(ProviderSettings.ExecutableName)
 			? AppMode.DefaultExecutableName
@@ -83,19 +69,14 @@ public partial class Installer : Control
 	}
 
 
-
-	// Custom functions
 	private async void InstallSelectedVersion()
 	{
-		// Launches confirmation window, and cancels if not confirmed.
-		var confirm = await Tools.Instance.ConfirmationPopup();
-		if (confirm != true)
+		if (!await Tools.Instance.ConfirmationPopup())
 		{
 			return;
 		}
 
 		string selectedVersion;
-
 		if (_customVersionCheckBox.ButtonPressed)
 		{
 			if (!AppMode.SupportsCustomVersions)
@@ -113,21 +94,18 @@ public partial class Installer : Control
 		}
 		else
 		{
-			int versionIndex = _versionButton.Selected;
-			selectedVersion = _versionButton.GetItemMetadata(versionIndex).AsString();
+			selectedVersion = _versionButton.GetItemMetadata(_versionButton.Selected).AsString();
 		}
 		await InstallVersion(selectedVersion);
 	}
-
 
 
 	private async Task InstallVersion(string version)
 	{
 		_activeDownloadRelease = await AppMode.GetRelease(
 			version,
-			Globals.Instance.LocalGithubClient,
-			_httpClient,
-			_osUsed,
+			Globals.Instance.HttpClient,
+			_os,
 			ProviderSettings.ReleaseChannel);
 
 		if (_activeDownloadRelease == null || string.IsNullOrEmpty(_activeDownloadRelease.DownloadUrl))
@@ -137,8 +115,7 @@ public partial class Installer : Control
 		}
 
 		DeleteOldVersion();
-		
-		// Set old install (if it exists) to not be disabled anymore.
+
 		if (!string.IsNullOrEmpty(ProviderSettings.InstalledVersion))
 		{
 			var installedIndex = GetVersionButtonIndex(ProviderSettings.InstalledVersion);
@@ -147,8 +124,8 @@ public partial class Installer : Control
 				_versionButton.SetItemDisabled(installedIndex, false);
 			}
 		}
-		
-		_downloadFileName = AppMode.GetDownloadFileName(_activeDownloadRelease, _osUsed, _executableName);
+
+		_downloadFileName = AppMode.GetDownloadFileName(_activeDownloadRelease, _os, _executableName);
 		_customVersionCheckBox.Disabled = true;
 		_versionButton.Disabled = true;
 		_downloadButton.Disabled = true;
@@ -157,12 +134,8 @@ public partial class Installer : Control
 		_downloadWindow.Visible = true;
 		_downloadLabel.GrabFocus();
 
-		// Ensures save directory exists
-		if (!Directory.Exists(ProviderSettings.SaveDirectory))
-		{
-			Directory.CreateDirectory(ProviderSettings.SaveDirectory);
-		}
-		
+		Directory.CreateDirectory(ProviderSettings.SaveDirectory);
+
 		_downloadRequester.DownloadFile = Path.Join(ProviderSettings.SaveDirectory, _downloadFileName);
 		var requestError = _downloadRequester.Request(_activeDownloadRelease.DownloadUrl);
 		if (requestError != Error.Ok)
@@ -173,46 +146,42 @@ public partial class Installer : Control
 		}
 
 		_downloadUpdateTimer.Start();
-		_downloadLabel.Text = "Downloading...";
 	}
-	
-	
+
+
 	private void VersionDownloadCompleted(long result, long responseCode, string[] headers, byte[] body)
 	{
 		_downloadUpdateTimer.Stop();
 		ResetDownloadControls();
-		if (result == (int)HttpRequest.Result.Success && responseCode is >= 200 and < 400)
-		{
-			ProviderSettings.InstalledVersion = _activeDownloadRelease.Version;
-			// Used to save version installed after download.
-			Globals.Instance.SyncCurrentProviderSettings();
-			_downloadProgressBar.Value = 100;
-			_downloadLabel.Text = "Successfully Downloaded!";
 
-			AddInstalledVersion();
-			UnpackAndSetPermissions();
-			if (_createShortcutButton.ButtonPressed)
-			{
-				_downloadWindow.Visible = false;
-				CreateShortcut();
-			}
-
-			_downloadWindow.Visible = false;
-
-			if (Settings.LauncherMode)
-			{
-				Tools.Instance.LaunchEmulator();
-			}
-			
-			Globals.Instance.SyncCurrentProviderSettings();
-		}
-		else
+		if (result != (int)HttpRequest.Result.Success || responseCode is < 200 or >= 400)
 		{
 			Tools.Instance.AddError($"Failed to download {AppMode.Name}, result: {result}, HTTP status: {responseCode}");
 			_downloadProgressBar.Value = 0;
+			return;
 		}
+
+		ProviderSettings.InstalledVersion = _activeDownloadRelease.Version;
+		Globals.Instance.SyncCurrentProviderSettings();
+		_downloadProgressBar.Value = 100;
+		_downloadLabel.Text = "Successfully Downloaded!";
+
+		AddInstalledVersion();
+		UnpackAndSetPermissions();
+		if (_createShortcutButton.ButtonPressed)
+		{
+			_downloadWindow.Visible = false;
+			CreateShortcut();
+		}
+
+		if (Settings.LauncherMode)
+		{
+			Tools.Instance.LaunchEmulator();
+		}
+
+		Globals.Instance.SyncCurrentProviderSettings();
 	}
-	
+
 
 	private void UpdateDownloadBar()
 	{
@@ -242,9 +211,9 @@ public partial class Installer : Control
 			return;
 		}
 
-		if (_autoUnpackButton.ButtonPressed || _autoUpdate || AppMode.IsSingleFileDownload(_osUsed))
+		if (_autoUnpackButton.ButtonPressed || _autoUpdate || AppMode.IsSingleFileDownload(_os))
 		{
-			if (!Tools.DeleteDirectoryContents(ProviderSettings.SaveDirectory))
+			if (!FsHelpers.DeleteDirectoryContents(ProviderSettings.SaveDirectory))
 			{
 				Tools.Instance.AddError("Failed to clear old install files before downloading.");
 			}
@@ -254,111 +223,16 @@ public partial class Installer : Control
 
 	private void CreateShortcut()
 	{
-		String linuxShortcutName = $"{AppMode.Id}.desktop";
-		String windowsShortcutName = $"{AppMode.Id}.lnk";
-		String iconPath = Path.Join(ProviderSettings.SaveDirectory, "Icon.png");
-
-		string executable = _autoUpdate ? OS.GetExecutablePath() : ProviderSettings.ExecutablePath;
-		string launcherFlag = null;
-		if (_autoUpdate)
-		{
-			launcherFlag = "--launcher";
-		}
-		else
-		{
-			GetExistingVersion();
-		}
+		var executable = _autoUpdate ? OS.GetExecutablePath() : ProviderSettings.ExecutablePath;
+		var launcherFlag = _autoUpdate ? "--launcher" : null;
 
 		if (!File.Exists(executable))
 		{
 			Tools.Instance.AddError("No executable path found, shortcut creation failed... Please contact a developer...");
 			return;
 		}
-		
-		if (_osUsed == "Linux")
-		{
-			_icon.SavePng(iconPath);
-			string shortcutContent = $@"
-[Desktop Entry]
-Comment=Nintendo Switch video game console emulator
-Exec={executable} {launcherFlag}
-GenericName=Switch Emulator
-Icon={iconPath}
-MimeType=
-Name={AppMode.Name}
-Path=
-StartupNotify=true
-Terminal=false
-TerminalOptions=
-Type=Application
-Keywords=Nintendo;Switch;
-Categories=Game;Emulator;Qt;
-";
 
-			if (Directory.Exists("/usr/share/applications/"))
-			{
-				string shortcutPath = $@"/usr/share/applications/{linuxShortcutName}";
-
-				try
-				{
-					string tempShortcutPath = Path.Join(ProviderSettings.SaveDirectory, linuxShortcutName);
-					File.WriteAllText(tempShortcutPath, shortcutContent);
-					ProcessStartInfo startInfo = new ProcessStartInfo
-					{
-						FileName = "pkexec",
-						Arguments = $"mv {tempShortcutPath} {shortcutPath}",
-						UseShellExecute = false
-					};
-
-					Process process = new Process { StartInfo = startInfo };
-					process.Start();
-					process.WaitForExit();
-				}
-				catch (Exception shortcutError)
-				{
-					shortcutPath = Path.Join(ProviderSettings.SaveDirectory, linuxShortcutName);
-					Tools.Instance.AddError(
-						$@"Error creating shortcut, creating new at {shortcutPath}. Error:{shortcutError}");
-					File.WriteAllText(shortcutPath, shortcutContent);
-				}
-			}
-			else
-			{
-				Tools.Instance.AddError("Cannot find shortcut directory, please place manually.");
-			}
-		}
-		else if (_osUsed == "Windows")
-		{
-			string commonStartMenuPath =
-				System.Environment.GetFolderPath(System.Environment.SpecialFolder.CommonStartMenu);
-			string emulatorStartMenuPath = Path.Combine(commonStartMenuPath, "Programs", "EmuStack", AppMode.Name);
-			string emulatorShortcutPath = Path.Combine(emulatorStartMenuPath, windowsShortcutName);
-			var windowsShortcut = new WindowsShortcut
-			{
-				Path = executable,
-				IconLocation = ProviderSettings.ExecutablePath,
-				Arguments = launcherFlag
-			};
-
-
-			try
-			{
-				if (!Directory.Exists(emulatorStartMenuPath))
-				{
-					Directory.CreateDirectory(emulatorStartMenuPath);
-				}
-
-				windowsShortcut.Save(emulatorShortcutPath);
-			}
-			catch (Exception shortcutError)
-			{
-				emulatorShortcutPath = Path.Join(ProviderSettings.SaveDirectory, windowsShortcutName);
-				Tools.Instance.AddError(
-					$@"cannot create shortcut, ensure app is running as admin. Placing instead at {emulatorShortcutPath}. Exception:{shortcutError}");
-				windowsShortcut.Save(emulatorShortcutPath);
-			}
-
-		}
+		ShortcutFactory.Create(AppMode, _os, executable, launcherFlag, ProviderSettings.SaveDirectory, _icon);
 	}
 
 
@@ -368,14 +242,13 @@ Categories=Game;Emulator;Qt;
 		{
 			_versionButton.Clear();
 			_availableReleases = await AppMode.GetAvailableReleases(
-				Globals.Instance.LocalGithubClient,
-				_httpClient,
-				_osUsed,
+				Globals.Instance.HttpClient,
+				_os,
 				ProviderSettings.ReleaseChannel);
 			_latestRelease = _availableReleases.FirstOrDefault();
 			if (_latestRelease == null)
 			{
-				Tools.Instance.AddError("Unable to fetch latest emulator release");
+				Tools.Instance.AddError($"Unable to fetch latest {AppMode.Name} release.");
 				return;
 			}
 
@@ -387,21 +260,17 @@ Categories=Game;Emulator;Qt;
 				_versionButton.SetItemMetadata(_versionButton.ItemCount - 1, release.Version);
 			}
 
-		
-			//Checks if there is already a version installed, and if so adds it.
 			if (!string.IsNullOrEmpty(ProviderSettings.InstalledVersion))
 			{
 				AddInstalledVersion();
 			}
-			
+
 			_downloadButton.Disabled = false;
-			
-			// If running in launcher mode updates and launches yuzu
+
 			if (Settings.LauncherMode)
 			{
 				if (_latestRelease.Version != ProviderSettings.InstalledVersion)
 				{
-					// The emulator will launch after the download completes.
 					await InstallVersion(_latestRelease.Version);
 				}
 				else
@@ -412,7 +281,9 @@ Categories=Game;Emulator;Qt;
 		}
 		catch (Exception versionPullException)
 		{
-			Tools.Instance.AddError("Failed to get latest versions error code: " + versionPullException);
+			_latestVersionLabel.Text = "Latest: unavailable";
+			_downloadButton.Disabled = true;
+			Tools.Instance.AddError($"Failed to get {AppMode.Name} versions: {versionPullException.Message}");
 		}
 	}
 
@@ -421,10 +292,8 @@ Categories=Game;Emulator;Qt;
 	{
 		var installedVersion = ProviderSettings.InstalledVersion;
 		var selectedIndex = GetVersionButtonIndex(installedVersion);
-		// Set the custom version to default of the currently installed one
 		_customVersionLineEdit.Text = installedVersion;
 
-		// Checks if the item was already added, if so sets it as current, otherwise adds a new item entry for it.
 		if (selectedIndex >= 0)
 		{
 			_versionButton.Selected = selectedIndex;
@@ -457,62 +326,71 @@ Categories=Game;Emulator;Qt;
 
 	private void UnpackAndSetPermissions()
 	{
-		string downloadPath = Path.Join(ProviderSettings.SaveDirectory, _downloadFileName);
-		if (AppMode.IsSingleFileDownload(_osUsed))
+		var downloadPath = Path.Join(ProviderSettings.SaveDirectory, _downloadFileName);
+		if (AppMode.IsSingleFileDownload(_os))
 		{
-			if (_osUsed == "Linux")
+			if (_os == OsKind.Linux)
 			{
 				SetUserExecutable(downloadPath);
 			}
 
 			ProviderSettings.ExecutablePath = downloadPath;
 			Globals.Instance.SyncCurrentProviderSettings();
+			return;
 		}
-		else if (_autoUnpackButton.ButtonPressed || _autoUpdate)
-		{
-			if (downloadPath.EndsWith(".dmg", StringComparison.OrdinalIgnoreCase))
-			{
-				Tools.Instance.AddError("Downloaded a macOS DMG. Automatic unpack is not supported for this package yet.");
-				return;
-			}
 
-			using Stream stream = File.OpenRead(downloadPath);
+		if (!_autoUnpackButton.ButtonPressed && !_autoUpdate)
+		{
+			return;
+		}
+
+		if (downloadPath.EndsWith(".dmg", StringComparison.OrdinalIgnoreCase))
+		{
+			// macOS DMGs ship as a mountable image; we don't have a clean way to mount,
+			// copy, and detach without elevated permissions, so leave the file in place
+			// and point ExecutablePath at it. Launch will surface a clear error.
+			ProviderSettings.ExecutablePath = downloadPath;
+			Globals.Instance.SyncCurrentProviderSettings();
+			Tools.Instance.AddError("Downloaded a macOS DMG. Mount it manually and launch the bundled app — automatic unpack is not supported.");
+			return;
+		}
+
+		using (var stream = File.OpenRead(downloadPath))
+		{
 			var reader = ReaderFactory.OpenReader(stream);
 			while (reader.MoveToNextEntry())
 			{
 				if (!reader.Entry.IsDirectory)
 				{
-					ExtractionOptions opt = new ExtractionOptions
+					reader.WriteEntryToDirectory(ProviderSettings.SaveDirectory, new ExtractionOptions
 					{
 						ExtractFullPath = true,
-						Overwrite = true
-					};
-					reader.WriteEntryToDirectory(ProviderSettings.SaveDirectory, opt);
+						Overwrite = true,
+					});
 				}
 			}
-
-			foreach (var folderName in AppMode.GetExtractedDirectoriesToFlatten(_activeDownloadRelease, _osUsed))
-			{
-				Tools.MoveFilesAndDirs(Path.Join(ProviderSettings.SaveDirectory, folderName), ProviderSettings.SaveDirectory);
-			}
-
-			var executablePath = AppMode.FindExecutable(ProviderSettings.SaveDirectory, _osUsed, _executableName);
-			if (string.IsNullOrEmpty(executablePath))
-			{
-				Tools.Instance.AddError($"Unable to find {AppMode.Name} executable after extraction.");
-				return;
-			}
-
-			executablePath = RenameExecutableIfRequested(executablePath);
-			if (_osUsed == "Linux" && File.Exists(executablePath))
-			{
-				SetUserExecutable(executablePath);
-			}
-
-			ProviderSettings.ExecutablePath = executablePath;
-			Globals.Instance.SyncCurrentProviderSettings();
 		}
-		
+
+		foreach (var folderName in AppMode.GetExtractedDirectoriesToFlatten(_activeDownloadRelease, _os))
+		{
+			FsHelpers.MoveFilesAndDirs(Path.Join(ProviderSettings.SaveDirectory, folderName), ProviderSettings.SaveDirectory);
+		}
+
+		var executablePath = AppMode.FindExecutable(ProviderSettings.SaveDirectory, _os, _executableName);
+		if (string.IsNullOrEmpty(executablePath))
+		{
+			Tools.Instance.AddError($"Unable to find {AppMode.Name} executable after extraction.");
+			return;
+		}
+
+		executablePath = RenameExecutableIfRequested(executablePath);
+		if (_os == OsKind.Linux && File.Exists(executablePath))
+		{
+			SetUserExecutable(executablePath);
+		}
+
+		ProviderSettings.ExecutablePath = executablePath;
+		Globals.Instance.SyncCurrentProviderSettings();
 	}
 
 
@@ -538,50 +416,29 @@ Categories=Game;Emulator;Qt;
 
 	private static void SetUserExecutable(string executablePath)
 	{
-		var executableFile = new UnixFileInfo(executablePath)
+		_ = new UnixFileInfo(executablePath)
 		{
-			FileAccessPermissions = FileAccessPermissions.UserReadWriteExecute
+			FileAccessPermissions = FileAccessPermissions.UserReadWriteExecute,
 		};
 	}
 
 
-	private String GetExistingVersion()
+	private async void OnInstallLocationButtonPressed()
 	{
-		if (DirAccess.DirExistsAbsolute(ProviderSettings.SaveDirectory))
+		var picked = await Tools.Instance.PickFolder(ProviderSettings.SaveDirectory);
+		if (picked == null)
 		{
-			var previousSave = DirAccess.Open(ProviderSettings.SaveDirectory);
-
-			foreach (var file in previousSave.GetFiles())
-			{
-				if (file.GetExtension() == "AppImage" || file == _downloadFileName)
-				{
-					return Path.Join(ProviderSettings.SaveDirectory, file);
-				}
-			}
+			return;
 		}
 
-		Tools.Instance.AddError("Unable to find existing version");
-		return "";
-	}
-
-
-	// Signal functions
-	private void OnInstallLocationButtonPressed()
-	{
-		var saveDirectoryLocationInput = Dialog.FolderPicker(ProviderSettings.SaveDirectory).Path;
-		if (saveDirectoryLocationInput != null)
-		{
-			ProviderSettings.SaveDirectory = saveDirectoryLocationInput;
-		}
-		
-		_installLocationButton.Text = ProviderSettings.SaveDirectory;
+		ProviderSettings.SaveDirectory = picked;
 		Globals.Instance.SyncCurrentProviderSettings();
+		_installLocationButton.Text = ProviderSettings.SaveDirectory;
 	}
 
 
 	private void AutoUnpackToggled(bool unpackEnabled)
 	{
-		// If unpack is toggled off, ensures the create shortcut button is also disabled and turns off.
 		_createShortcutButton.ButtonPressed = unpackEnabled && _createShortcutButton.ButtonPressed;
 		_createShortcutButton.Disabled = !unpackEnabled;
 		_downloadWarning.Visible = _extractWarning.Visible || unpackEnabled;
@@ -589,7 +446,19 @@ Categories=Game;Emulator;Qt;
 	}
 
 
-	private void CustomVersionSpinBoxEditable(bool editable)
+	private void CreateShortcutToggled(bool createShortcut)
+	{
+		if (!createShortcut)
+		{
+			_autoUpdate = false;
+			_autoUpdateButton.ButtonPressed = false;
+		}
+
+		_autoUpdateButton.Disabled = !createShortcut;
+	}
+
+
+	private void CustomVersionEditable(bool editable)
 	{
 		_customVersionLineEdit.Editable = editable;
 		_versionButton.Disabled = editable;

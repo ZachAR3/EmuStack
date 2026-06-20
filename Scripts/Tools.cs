@@ -1,32 +1,49 @@
 using Godot;
 using System;
-using System.IO;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using ContentType = Octokit.ContentType;
-using HttpClient = System.Net.Http.HttpClient;
+using HtmlAgilityPack;
+
 
 public partial class Tools : Node
 {
-	[Export()] private Control _errorConsoleContainer;
+	[Export] private Control _errorConsoleContainer;
 	[Export] private TextEdit _errorConsole;
 	[Export] private RichTextLabel _errorNotifier;
 	[Export] private PopupMenu _confirmationPopup;
 
 	public static Tools Instance;
-	
-	// Internal variables
-	private bool? _confirmationChoice;
+
+	private TaskCompletionSource<bool> _confirmationSource;
+	private FileDialog _folderDialog;
+	private TaskCompletionSource<string> _folderPickerSource;
 
 
-	// Godot functions
 	public override void _Ready()
 	{
 		Instance = this;
+		_confirmationPopup.IndexPressed += OnConfirmationPressed;
+		// Resolve any in-flight popup as cancelled when it hides without a click
+		// (Escape, click-outside) so awaiters never leak.
+		_confirmationPopup.PopupHide += () => _confirmationSource?.TrySetResult(false);
+
+		// Godot's built-in FileDialog works on all platforms with no native deps.
+		// UseNativeDialog uses the OS native picker on Windows/macOS when available.
+		_folderDialog = new FileDialog
+		{
+			Title = "Select Folder",
+			FileMode = FileDialog.FileModeEnum.OpenDir,
+			Access = FileDialog.AccessEnum.Filesystem,
+			UseNativeDialog = true,
+			Size = new Vector2I(800, 600),
+		};
+		_folderDialog.DirSelected += OnFolderSelected;
+		_folderDialog.Canceled += () => _folderPickerSource?.TrySetResult(null);
+		AddChild(_folderDialog);
 	}
-	
-	
+
+
 	public override void _Input(InputEvent @event)
 	{
 		if (@event.IsActionPressed("OpenConsole"))
@@ -36,272 +53,138 @@ public partial class Tools : Node
 	}
 
 
-	// General functions
 	public void LaunchEmulator()
 	{
-		string executablePath = Globals.Instance.CurrentProviderSettings.ExecutablePath;
-		string emulatorName = Globals.Instance.AppMode.Name;
+		var executablePath = Globals.Instance.CurrentProviderSettings.ExecutablePath;
+		var emulatorName = Globals.Instance.AppMode.Name;
 
 		try
 		{
-			ProcessStartInfo emulatorProcessInfo = new(executablePath);
-
-			Process.Start(emulatorProcessInfo);
+			Process.Start(new ProcessStartInfo(executablePath));
 			GetTree().Quit();
 		}
 		catch (Exception launchException)
 		{
 			AddError($"Unable to launch {emulatorName}: " + launchException.Message);
-		}	
-	}
-
-	// Bit math I don't understand to convert to and from an int for indexing
-	public static int ToInt(string version)
-	{
-		if (TryToVersionInt(version, out var versionInt))
-		{
-			return versionInt;
 		}
-
-		throw new FormatException($"Invalid version number: {version}");
 	}
 
 
-	public static bool TryToVersionInt(string version, out int versionInt)
-	{
-		versionInt = -1;
-		if (string.IsNullOrWhiteSpace(version))
-		{
-			return false;
-		}
-
-		// Override of sorts so this function can be used on both ints and strings
-		if (int.TryParse(version, out versionInt))
-		{
-			return true;
-		}
-
-		var semanticVersion = Regex.Match(version.Trim().TrimStart('v'), @"^\d+\.\d+\.\d+");
-		if (!semanticVersion.Success)
-		{
-			return false;
-		}
-
-		string[] versionParts = semanticVersion.Value.Split('.');
-		if (!int.TryParse(versionParts[0], out var major) ||
-		    !int.TryParse(versionParts[1], out var minor) ||
-		    !int.TryParse(versionParts[2], out var build))
-		{
-			return false;
-		}
-
-		versionInt = (major << 22) | (minor << 12) | build;
-		return true;
-	}
-
-
-	public static string FromInt(int version)
-	{
-		int major = (version >> 22) & 0x3FF;
-		int minor = (version >> 12) & 0x3FF;
-		int build = version & 0xFFF;
-		return @$"{major}.{minor}.{build}";
-	}
-	
-	
 	private void ToggleConsole()
 	{
 		_errorConsoleContainer.Visible = !_errorConsoleContainer.Visible;
 	}
-	
-	
-	public async Task<bool?> ConfirmationPopup(string titleText = "Are you sure?")
-	{
-		// Checks if the confirmationPopup is already connected to the ConfirmationPressed signal, if not, connect it.
-		if (!_confirmationPopup.IsConnected("index_pressed", new Callable(this, nameof(ConfirmationPressed))))
-		{
-			_confirmationPopup.Connect("index_pressed", new Callable(this, nameof(ConfirmationPressed)));
-		}
 
+
+	public Task<bool> ConfirmationPopup(string titleText = "Are you sure?")
+	{
+		// Resolve any prior popup as cancelled before opening a new one.
+		_confirmationSource?.TrySetResult(false);
+		_confirmationSource = new TaskCompletionSource<bool>();
 		_confirmationPopup.Title = titleText;
 		_confirmationPopup.PopupCentered();
-		await ToSignal(_confirmationPopup, "index_pressed");
-		return _confirmationChoice;
+		return _confirmationSource.Task;
 	}
-	
-	public bool ClearInstallationFolder(string saveDirectory)
+
+
+	/// <summary>
+	/// Shows a folder picker dialog. Returns the selected path, or null if the
+	/// user cancelled. The caller is responsible for assigning the result and
+	/// syncing settings.
+	/// </summary>
+	public Task<string> PickFolder(string current)
 	{
-		bool clearedSuccessfully = DeleteDirectoryContents(saveDirectory);
-		return clearedSuccessfully;
+		// Resolve any prior picker as cancelled before opening a new one.
+		_folderPickerSource?.TrySetResult(null);
+		_folderPickerSource = new TaskCompletionSource<string>();
+
+		if (!string.IsNullOrEmpty(current))
+		{
+			_folderDialog.CurrentDir = current;
+		}
+
+		_folderDialog.PopupCentered();
+		return _folderPickerSource.Task;
 	}
-	
-	public static bool DeleteDirectoryContents(string directoryPath)
+
+
+	private void OnFolderSelected(string dir)
 	{
-		if (string.IsNullOrWhiteSpace(directoryPath) || !Directory.Exists(directoryPath))
-		{
-			return false;
-		}
-
-		var fullPath = Path.GetFullPath(directoryPath);
-		var rootPath = Path.GetPathRoot(fullPath);
-		if (fullPath == rootPath || fullPath == System.Environment.GetFolderPath(System.Environment.SpecialFolder.UserProfile))
-		{
-			return false;
-		}
-
-		// Delete all files within the directory
-		string[] files = Directory.GetFiles(directoryPath);
-		foreach (string file in files)
-		{
-			File.Delete(file);
-		}
-
-		// Delete all subdirectories within the directory
-		string[] directories = Directory.GetDirectories(directoryPath);
-		foreach (string directory in directories)
-		{
-			// Recursively delete subdirectory contents
-			DeleteDirectoryContents(directory); 
-			Directory.Delete(directory);
-		}
-
-		return true;
+		_folderPickerSource?.TrySetResult(dir);
 	}
-	
-	
-	public static void MoveFilesAndDirs(string sourceDirectory, string targetDirectory)
+
+
+	public async void AddError(string error)
 	{
-		if (!Directory.Exists(sourceDirectory))
+		var formattedError = FormatError(error);
+		Callable.From(() =>
+		{
+			_errorConsole.Text += $"\n [{DateTime.Now:h:mm:ss}]	{formattedError}";
+			_errorNotifier.Visible = true;
+		}).CallDeferred();
+
+		await ToSignal(GetTree().CreateTimer(5), "timeout");
+
+		// The Tools node (and its UI refs) can be freed while the timer runs, e.g. when
+		// the user switches provider and the scene reloads. Guard before touching nodes.
+		if (!IsInstanceValid(this) || !IsInstanceValid(_errorNotifier))
 		{
 			return;
 		}
 
-		// Create the target directory if it doesn't exist
-		if (!Directory.Exists(targetDirectory) && !string.IsNullOrEmpty(targetDirectory))
+		_errorNotifier.Visible = false;
+	}
+
+
+	private void OnConfirmationPressed(long itemIndex)
+	{
+		_confirmationSource?.TrySetResult(itemIndex == 0);
+	}
+
+
+	private static string FormatError(string error)
+	{
+		if (string.IsNullOrWhiteSpace(error))
 		{
-			Directory.CreateDirectory(targetDirectory);
+			return "Unknown error.";
 		}
 
-		// Get all files and directories from the source directory
-		string[] files = Directory.GetFiles(sourceDirectory);
-		string[] directories = Directory.GetDirectories(sourceDirectory);
-
-		// Move files to the target directory
-		foreach (string file in files)
+		var formattedError = error.Replace("\r", "\n");
+		if (LooksLikeHtml(formattedError))
 		{
-			string fileName = Path.GetFileName(file);
-			string targetPath = Path.Combine(targetDirectory, fileName);
-			File.Move(file, targetPath, true);
+			formattedError = StripHtml(formattedError);
 		}
 
-		// Move directories to the target directory
-		foreach (string directory in directories)
+		const int maxErrorLength = 1200;
+		if (formattedError.Length > maxErrorLength)
 		{
-			string directoryName = Path.GetFileName(directory);
-			string targetPath = Path.Combine(targetDirectory, directoryName);
-			if (!Directory.Exists(targetPath))
+			formattedError = formattedError[..maxErrorLength] + "...";
+		}
+
+		return formattedError;
+	}
+
+
+	private static bool LooksLikeHtml(string error)
+	{
+		return Regex.IsMatch(error, @"<\s*!doctype|<\s*html|<\s*body|<\s*head", RegexOptions.IgnoreCase);
+	}
+
+
+	private static string StripHtml(string html)
+	{
+		var document = new HtmlDocument();
+		document.LoadHtml(html);
+
+		var noiseNodes = document.DocumentNode.SelectNodes("//script|//style|//noscript|//template");
+		if (noiseNodes != null)
+		{
+			foreach (var node in noiseNodes)
 			{
-				Directory.Move(directory, targetPath);
+				node.Remove();
 			}
 		}
 
-		// Remove the source directory if it is empty
-		if (Directory.GetFiles(sourceDirectory).Length == 0 && Directory.GetDirectories(sourceDirectory).Length == 0)
-		{
-			Directory.Delete(sourceDirectory);
-		}
-	}
-	
-	
-	public void DuplicateDirectoryContents(string sourceDir, string destinationDir, bool overwriteFiles)
-	{
-		if (!Directory.Exists(sourceDir) || string.IsNullOrEmpty(destinationDir))
-		{
-			throw new DirectoryNotFoundException($"Cannot copy from {sourceDir} to {destinationDir}");
-		}
-
-		// Get all directories in the source directory
-		string[] allDirectories = Directory.GetDirectories(sourceDir, "*", SearchOption.AllDirectories);
-
-		foreach (string dir in allDirectories)
-		{
-			string dirToCreate = dir.Replace(sourceDir, destinationDir);
-			Directory.CreateDirectory(dirToCreate);
-		}
-
-		// Get all files in the source directory
-		string[] allFiles = Directory.GetFiles(sourceDir, "*.*", SearchOption.AllDirectories);
-
-		foreach (string filePath in allFiles)
-		{
-			string newFilePath = filePath.Replace(sourceDir, destinationDir);
-			File.Copy(filePath, newFilePath, overwriteFiles);
-		}
-	}
-
-
-	public async void AddError(String error)
-	{
-		Callable.From(() =>
-		{
-			_errorConsole.Text += $"\n [{DateTime.Now:h:mm:ss}]	{error}";
-			_errorNotifier.Visible = true;
-		}).CallDeferred();
-		
-		await Task.Run(async () =>
-		{
-			await ToSignal(GetTree().CreateTimer(5), "timeout");
-			_errorNotifier.SetThreadSafe("visible", false);
-		});
-
-	}
-
-
-	// Signal functions
-	private void ConfirmationPressed(long itemIndex)
-	{
-		_confirmationChoice = itemIndex == 0;
-	}
-
-
-	public async Task<Exception> DownloadFolder(string owner, string repo, string folderPath, string destinationPath)
-	{
-		try
-		{
-			HttpClient httpClient = new();
-			var gitHubClient = Globals.Instance.LocalGithubClient;
-
-			// Retrieve the repository content for the specified folder
-			var contents = await gitHubClient.Repository.Content.GetAllContents(owner, repo, folderPath);
-
-			// Create the destination folder
-			Directory.CreateDirectory(destinationPath);
-
-			// Download and copy each file in the folder
-			foreach (var content in contents)
-			{
-				if (content.Type == ContentType.File)
-				{
-					var fileContent = await httpClient.GetByteArrayAsync(content.DownloadUrl);
-					var filePath = Path.Combine(destinationPath, content.Name);
-
-					// Write the file content to disk
-					await File.WriteAllBytesAsync(filePath, fileContent);
-				}
-				else if (content.Type == ContentType.Dir)
-				{
-					var subFolderPath = Path.Combine(destinationPath, content.Name);
-
-					// Recursively download and copy the contents of sub-folders
-					await DownloadFolder(owner, repo, content.Path, subFolderPath);
-				}
-			}
-
-			return null;
-		}
-		catch (Exception downloadException)
-		{
-			return downloadException;
-		}
+		return Regex.Replace(document.DocumentNode.InnerText ?? "", @"\s+", " ").Trim();
 	}
 }

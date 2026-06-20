@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Text.Json;
 using System.Threading.Tasks;
 using Godot;
 using SharpCompress.Archives;
@@ -10,23 +9,19 @@ using SharpCompress.Common;
 
 public partial class StandardModManagement : Node
 {
-	public Dictionary<string, List<Mod>> InstalledMods;
-	public Dictionary<string, List<Mod>> SelectedSourceMods;
-
 	public HttpRequest DownloadRequester;
-    public Timer DownloadUpdateTimer;
+	public Timer DownloadUpdateTimer;
 
 
-    public async Task<bool> InstallMod(string gameId, Mod mod)
+	public async Task<bool> InstallMod(string gameId, Mod mod, Dictionary<string, List<Mod>> installedMods, Dictionary<string, List<Mod>> sourceMods)
 	{
 		try
 		{
-			string downloadPath = Path
-				.Join(Globals.Instance.CurrentProviderSettings.ModsLocation, gameId, $@"{mod.ModName.Replace(":", ".")}-Download");
-			string installPath = Path
-				.Join(Globals.Instance.CurrentProviderSettings.ModsLocation, gameId, $@"Managed{mod.ModName.Replace(":", ".")}");
+			var modsLocation = Globals.Instance.CurrentProviderSettings.ModsLocation;
+			var downloadPath = ModPaths.DownloadArchive(modsLocation, gameId, mod.ModName);
+			var installPath = ModPaths.ManagedFolder(modsLocation, gameId, mod.ModName);
+			var stagingPath = ModPaths.TempStaging(installPath);
 
-			// Downloads the mod zip to the download path
 			DownloadRequester.DownloadFile = downloadPath;
 			var requestError = DownloadRequester.Request(mod.ModUrl);
 			if (requestError != Error.Ok)
@@ -40,14 +35,13 @@ public partial class StandardModManagement : Node
 			await using (var stream = File.OpenRead(downloadPath))
 			{
 				var reader = ArchiveFactory.OpenArchive(stream);
-
-				Directory.CreateDirectory(installPath + "-temp");
+				Directory.CreateDirectory(stagingPath);
 
 				foreach (var entry in reader.Entries)
 				{
 					if (!entry.IsDirectory)
 					{
-						entry.WriteToDirectory(installPath + "-temp", new ExtractionOptions()
+						entry.WriteToDirectory(stagingPath, new ExtractionOptions
 						{
 							ExtractFullPath = true,
 							Overwrite = true
@@ -58,66 +52,55 @@ public partial class StandardModManagement : Node
 
 			if (Directory.Exists(installPath))
 			{
-				Tools.DeleteDirectoryContents(installPath);
+				FsHelpers.DeleteDirectoryContents(installPath);
 			}
-			// Moves the files from the temp folder into the install path
-			Tools.MoveFilesAndDirs(installPath + "-temp", installPath);
+			FsHelpers.MoveFilesAndDirs(stagingPath, installPath);
 
-			// Cleanup
-			if (Directory.Exists(installPath + "-temp"))
+			if (Directory.Exists(stagingPath))
 			{
-				Directory.Delete(installPath + "-temp", true);
+				Directory.Delete(stagingPath, true);
 			}
 			File.Delete(downloadPath);
 
-			// Sets the installed path and initializes the installed mods list for the given game if needed
 			mod.InstalledPath = installPath;
-			InstalledMods[gameId] = !InstalledMods.ContainsKey(gameId)
-				? new List<Mod>()
-				: InstalledMods[gameId];
-
-			InstalledMods[gameId].Add(mod);
-			if (SelectedSourceMods.ContainsKey(gameId))
-			{
-				SelectedSourceMods[gameId].Remove(mod);
-			}
+			RecordInstalledMod(gameId, mod, installedMods, sourceMods);
 		}
 		catch (Exception installError)
 		{
 			Tools.Instance.AddError($@"failed to install mod:{installError}");
 			return false;
 		}
-		
+
 		return true;
 	}
-	
-	
-	public async Task<bool> DeleteMod(string gameId, Mod mod, int source, int sourcesAll, bool noConfirmation = false)
+
+
+	public async Task<bool> DeleteMod(string gameId, Mod mod, Dictionary<string, List<Mod>> installedMods, Dictionary<string, List<Mod>> sourceMods, bool noConfirmation = false)
 	{
 		try
 		{
 			if (!noConfirmation)
 			{
-				var confirm = await Tools.Instance.ConfirmationPopup($@"Delete {mod.ModName}?");
-				if (confirm == false)
+				if (!await Tools.Instance.ConfirmationPopup($@"Delete {mod.ModName}?"))
 				{
 					return false;
 				}
 			}
-			
-			InstalledMods[gameId].Remove(mod);
-			
-			// If the mod is available online re-adds it to the source list
-			if (mod.ModUrl != null && (source == mod.Source || source == sourcesAll))
+
+			installedMods[gameId].Remove(mod);
+
+			// If the mod is available online re-add it to the source list.
+			if (mod.ModUrl != null)
 			{
-				// If there is no mod list for the game id creates one
-				SelectedSourceMods[gameId] =
-					!SelectedSourceMods.ContainsKey(gameId) ? new List<Mod>() : SelectedSourceMods[gameId];
-				SelectedSourceMods[gameId].Add(mod);
+				if (!sourceMods.TryGetValue(gameId, out var gameSourceMods))
+				{
+					gameSourceMods = new List<Mod>();
+					sourceMods[gameId] = gameSourceMods;
+				}
+				gameSourceMods.Add(mod);
 			}
 
-			// Deletes directory contents, then the directory itself.
-			Tools.DeleteDirectoryContents(mod.InstalledPath);
+			FsHelpers.DeleteDirectoryContents(mod.InstalledPath);
 			Directory.Delete(mod.InstalledPath, true);
 		}
 		catch (Exception removeError)
@@ -125,7 +108,24 @@ public partial class StandardModManagement : Node
 			Tools.Instance.AddError("failed to remove mod:" + removeError);
 			return false;
 		}
-		
+
 		return true;
 	}
+
+
+	public static void RecordInstalledMod(string gameId, Mod mod, Dictionary<string, List<Mod>> installedMods, Dictionary<string, List<Mod>> sourceMods)
+	{
+		if (!installedMods.TryGetValue(gameId, out var gameInstalledMods))
+		{
+			gameInstalledMods = new List<Mod>();
+			installedMods[gameId] = gameInstalledMods;
+		}
+		gameInstalledMods.Add(mod);
+
+		if (sourceMods.TryGetValue(gameId, out var gameSourceMods))
+		{
+			gameSourceMods.Remove(mod);
+		}
+	}
 }
+

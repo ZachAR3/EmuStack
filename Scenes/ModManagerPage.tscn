@@ -1,6 +1,6 @@
-[gd_scene load_steps=38 format=3 uid="uid://bdihe2bmwmgtp"]
+[gd_scene format=3 uid="uid://bdihe2bmwmgtp"]
 
-[ext_resource type="Script" path="res://Scripts/ModManager.cs" id="1_g8nhx"]
+[ext_resource type="Script" uid="uid://baxplx7lmxrue" path="res://Scripts/ModManager.cs" id="1_g8nhx"]
 [ext_resource type="Texture2D" uid="uid://duqgfmchd1v45" path="res://ImageAssets/blue-check-mark-icon.svg" id="2_2ngo2"]
 [ext_resource type="Texture2D" uid="uid://6v2ifgmyp6yp" path="res://ImageAssets/LoadingCircleAnimation/frame-1.png" id="3_m1c4w"]
 [ext_resource type="Texture2D" uid="uid://5thiqdc0a2hi" path="res://ImageAssets/LoadingCircleAnimation/frame-2.png" id="4_suxsp"]
@@ -146,7 +146,7 @@ animations = [{
 "speed": 30.0
 }]
 
-[node name="ModManager" type="Control" node_paths=PackedStringArray("_modList", "_downloadBar", "_downloadUpdateTimer", "_downloadRequester", "_titleRequester", "_loadingPanel", "_gamePickerButton", "_sourcePickerButton", "_modLocationButton", "_refreshButton", "_updateAllButton", "_updateSelectedButton", "_loadMoreButton") groups=["Initiate"]]
+[node name="ModManager" type="Control" node_paths=PackedStringArray("_modList", "_downloadBar", "_downloadUpdateTimer", "_downloadRequester", "_titleRequester", "_loadingPanel", "_gamePickerButton", "_sourcePickerButton", "_modLocationButton", "_refreshButton", "_updateAllButton", "_updateSelectedButton", "_loadMoreButton", "_manualGameIdLineEdit", "_addGameButton", "_searchBar") groups=["Initiate"]]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -155,156 +155,170 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_g8nhx")
 _installedModsPath = "user://InstalledMods.json"
-_modList = NodePath("ModsList")
-_downloadBar = NodePath("DownloadBar")
+_modList = NodePath("MainLayout/ContentRow/ModsList")
+_downloadBar = NodePath("MainLayout/DownloadBar")
 _downloadUpdateTimer = NodePath("DownloadUpdateTimer")
 _downloadRequester = NodePath("DownloadRequester")
 _titleRequester = NodePath("TitleRequester")
 _installedIcon = ExtResource("2_2ngo2")
 _loadingPanel = NodePath("LoadingWindow")
-_gamePickerButton = NodePath("Header/GameSelection")
-_sourcePickerButton = NodePath("Header/SourceSelection")
-_modLocationButton = NodePath("Header/ModLocationButton")
-_refreshButton = NodePath("SideBar/RefreshButton")
-_updateAllButton = NodePath("SideBar/UpdateAll")
-_updateSelectedButton = NodePath("SideBar/UpdateSelected")
-_loadMoreButton = NodePath("SideBar/LoadMore")
+_gamePickerButton = NodePath("MainLayout/Header/GameSelection")
+_sourcePickerButton = NodePath("MainLayout/Header/SourceSelection")
+_modLocationButton = NodePath("MainLayout/Header/ModLocationButton")
+_refreshButton = NodePath("MainLayout/ContentRow/SideBar/RefreshButton")
+_updateAllButton = NodePath("MainLayout/ContentRow/SideBar/UpdateAll")
+_updateSelectedButton = NodePath("MainLayout/ContentRow/SideBar/UpdateSelected")
+_loadMoreButton = NodePath("MainLayout/ContentRow/SideBar/LoadMore")
+_manualGameIdLineEdit = NodePath("MainLayout/Header/AddGameContainer/ManualGameId")
+_addGameButton = NodePath("MainLayout/Header/AddGameContainer/AddGameButton")
+_searchBar = NodePath("MainLayout/SearchBar")
 metadata/_edit_use_anchors_ = true
 
-[node name="Header" type="GridContainer" parent="."]
+[node name="MainLayout" type="VBoxContainer" parent="."]
 layout_mode = 1
-anchors_preset = -1
-anchor_left = 0.0130208
-anchor_top = 0.018
-anchor_right = 0.991667
-anchor_bottom = 0.162
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 16.0
+offset_top = 16.0
+offset_right = -16.0
+offset_bottom = -16.0
 grow_horizontal = 2
-columns = 2
+grow_vertical = 2
+theme_override_constants/separation = 12
 metadata/_edit_use_anchors_ = true
 
-[node name="GameSelectedLabel" type="Label" parent="Header"]
+[node name="Header" type="GridContainer" parent="MainLayout"]
+layout_mode = 2
+size_flags_vertical = 0
+theme_override_constants/h_separation = 16
+theme_override_constants/v_separation = 8
+columns = 2
+
+[node name="GameSelectedLabel" type="Label" parent="MainLayout/Header"]
 layout_mode = 2
 size_flags_horizontal = 0
 text = "Selected game:"
 
-[node name="GameSelection" type="OptionButton" parent="Header"]
+[node name="GameSelection" type="OptionButton" parent="MainLayout/Header"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 tooltip_text = "Button to change the currently selected game."
 text_overrun_behavior = 4
-metadata/_edit_use_anchors_ = true
 
-[node name="SourceSelectedLabel" type="Label" parent="Header"]
+[node name="AddGameLabel" type="Label" parent="MainLayout/Header"]
+layout_mode = 2
+size_flags_horizontal = 0
+text = "Add game ID:"
+
+[node name="AddGameContainer" type="HBoxContainer" parent="MainLayout/Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="ManualGameId" type="LineEdit" parent="MainLayout/Header/AddGameContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "0100F2C0115B6000"
+alignment = 1
+max_length = 16
+
+[node name="AddGameButton" type="Button" parent="MainLayout/Header/AddGameContainer"]
+layout_mode = 2
+text = "Add"
+
+[node name="SourceSelectedLabel" type="Label" parent="MainLayout/Header"]
 layout_mode = 2
 size_flags_horizontal = 0
 text = "Selected source:"
 
-[node name="SourceSelection" type="OptionButton" parent="Header"]
+[node name="SourceSelection" type="OptionButton" parent="MainLayout/Header"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 tooltip_text = "Button to change the current mod source."
 text_overrun_behavior = 4
-metadata/_edit_use_anchors_ = true
 
-[node name="ModsLocationLabel" type="Label" parent="Header"]
+[node name="ModsLocationLabel" type="Label" parent="MainLayout/Header"]
 layout_mode = 2
 size_flags_horizontal = 0
-text = "Mods location:
-"
+text = "Mods location:"
 
-[node name="ModLocationButton" type="Button" parent="Header"]
+[node name="ModLocationButton" type="Button" parent="MainLayout/Header"]
+custom_minimum_size = Vector2(400, 0)
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
-tooltip_text = "Button to change the mods folder. 
-Linux something like: 
+tooltip_text = "Button to change the mods folder.
+Linux something like:
 /home/username/.local/share/<emulator>/load/.
 Windows it should be something like
 C:\\Users\\username\\AppData\\Roaming\\<emulator>\\load"
 alignment = 0
 text_overrun_behavior = 4
+clip_text = true
 
-[node name="SideBar" type="VBoxContainer" parent="."]
-layout_mode = 1
-anchors_preset = -1
-anchor_left = 0.795833
-anchor_top = 0.175
-anchor_right = 0.991146
-anchor_bottom = 0.933
-grow_horizontal = 0
-grow_vertical = 2
-metadata/_edit_use_anchors_ = true
+[node name="SearchBar" type="LineEdit" parent="MainLayout"]
+custom_minimum_size = Vector2(0, 35)
+layout_mode = 2
+size_flags_vertical = 0
+placeholder_text = "Search"
 
-[node name="RefreshButton" type="Button" parent="SideBar"]
+[node name="ContentRow" type="HBoxContainer" parent="MainLayout"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 12
+
+[node name="ModsList" type="ItemList" parent="MainLayout/ContentRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+text_overrun_behavior = 4
+max_columns = 5
+fixed_icon_size = Vector2i(30, 30)
+
+[node name="SideBar" type="VBoxContainer" parent="MainLayout/ContentRow"]
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
+size_flags_horizontal = 0
+size_flags_vertical = 3
+theme_override_constants/separation = 8
+
+[node name="RefreshButton" type="Button" parent="MainLayout/ContentRow/SideBar"]
 layout_mode = 2
 text = "Refresh"
 
-[node name="UpdateAll" type="Button" parent="SideBar"]
+[node name="UpdateAll" type="Button" parent="MainLayout/ContentRow/SideBar"]
 layout_mode = 2
 tooltip_text = "Updates all mods from every game"
 text = "Update all mods"
-metadata/_edit_use_anchors_ = true
 
-[node name="UpdateSelected" type="Button" parent="SideBar"]
+[node name="UpdateSelected" type="Button" parent="MainLayout/ContentRow/SideBar"]
 layout_mode = 2
 tooltip_text = "Updates the selected mod (if installed)."
-text = "Update selected
-"
-metadata/_edit_use_anchors_ = true
+text = "Update selected"
 
-[node name="ClearMods" type="Button" parent="SideBar"]
+[node name="ClearMods" type="Button" parent="MainLayout/ContentRow/SideBar"]
 layout_mode = 2
 tooltip_text = "Clear mods folder (WARNING CLEARS THE ENTIRE MOD FOLDER FOR THE SELECTED GAME)"
-text = "Clear mods folder (WARNING CLEARS THE ENTIRE MOD FOLDER FOR THE SELECTED GAME)"
+text = "Clear mods folder"
 text_overrun_behavior = 4
-metadata/_edit_use_anchors_ = true
+clip_text = true
 
-[node name="VerticalSpacer" type="Control" parent="SideBar"]
+[node name="VerticalSpacer" type="Control" parent="MainLayout/ContentRow/SideBar"]
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="LoadMore" type="Button" parent="SideBar"]
+[node name="LoadMore" type="Button" parent="MainLayout/ContentRow/SideBar"]
 layout_mode = 2
 size_flags_vertical = 8
 text = "Load more"
 
-[node name="SearchBar" type="LineEdit" parent="."]
-layout_mode = 1
-anchors_preset = -1
-anchor_left = 0.0130208
-anchor_top = 0.186111
-anchor_right = 0.793229
-anchor_bottom = 0.223148
-placeholder_text = "Search"
-metadata/_edit_use_anchors_ = true
-
-[node name="ModsList" type="ItemList" parent="."]
-clip_contents = false
-layout_mode = 1
-anchors_preset = -1
-anchor_left = 0.0125
-anchor_top = 0.24
-anchor_right = 0.792708
-anchor_bottom = 0.933333
-grow_horizontal = 2
-grow_vertical = 2
-text_overrun_behavior = 4
-max_columns = 5
-fixed_icon_size = Vector2i(30, 30)
-metadata/_edit_use_anchors_ = true
-
-[node name="DownloadBar" type="ProgressBar" parent="."]
-layout_mode = 1
-anchors_preset = -1
-anchor_left = 0.013
-anchor_top = 0.943519
-anchor_right = 0.991
-anchor_bottom = 0.980556
-grow_horizontal = 2
-grow_vertical = 0
-metadata/_edit_use_anchors_ = true
+[node name="DownloadBar" type="ProgressBar" parent="MainLayout"]
+custom_minimum_size = Vector2(0, 30)
+layout_mode = 2
+size_flags_vertical = 0
 
 [node name="DownloadUpdateTimer" type="Timer" parent="."]
 process_mode = 3
@@ -355,14 +369,16 @@ metadata/_edit_use_anchors_ = true
 
 [node name="TitleRequester" type="HTTPRequest" parent="."]
 
-[connection signal="item_selected" from="Header/GameSelection" to="." method="SelectGame"]
-[connection signal="item_selected" from="Header/SourceSelection" to="." method="SourceSelected"]
-[connection signal="pressed" from="Header/ModLocationButton" to="." method="ModLocationPressed"]
-[connection signal="pressed" from="SideBar/RefreshButton" to="." method="RefreshPressed"]
-[connection signal="pressed" from="SideBar/UpdateAll" to="." method="UpdateAll"]
-[connection signal="pressed" from="SideBar/UpdateSelected" to="." method="UpdateSelectedPressed"]
-[connection signal="pressed" from="SideBar/ClearMods" to="." method="ClearModsPressed"]
-[connection signal="pressed" from="SideBar/LoadMore" to="." method="LoadNextPage"]
-[connection signal="text_changed" from="SearchBar" to="." method="SearchUpdated"]
-[connection signal="item_activated" from="ModsList" to="." method="ModClicked"]
+[connection signal="item_selected" from="MainLayout/Header/GameSelection" to="." method="SelectGame"]
+[connection signal="text_submitted" from="MainLayout/Header/AddGameContainer/ManualGameId" to="." method="AddGameTextSubmitted"]
+[connection signal="pressed" from="MainLayout/Header/AddGameContainer/AddGameButton" to="." method="AddGamePressed"]
+[connection signal="item_selected" from="MainLayout/Header/SourceSelection" to="." method="SourceSelected"]
+[connection signal="pressed" from="MainLayout/Header/ModLocationButton" to="." method="ModLocationPressed"]
+[connection signal="pressed" from="MainLayout/ContentRow/SideBar/RefreshButton" to="." method="RefreshPressed"]
+[connection signal="pressed" from="MainLayout/ContentRow/SideBar/UpdateAll" to="." method="UpdateAll"]
+[connection signal="pressed" from="MainLayout/ContentRow/SideBar/UpdateSelected" to="." method="UpdateSelectedPressed"]
+[connection signal="pressed" from="MainLayout/ContentRow/SideBar/ClearMods" to="." method="ClearModsPressed"]
+[connection signal="pressed" from="MainLayout/ContentRow/SideBar/LoadMore" to="." method="LoadNextPage"]
+[connection signal="text_changed" from="MainLayout/SearchBar" to="." method="SearchUpdated"]
+[connection signal="item_activated" from="MainLayout/ContentRow/ModsList" to="." method="ModClicked"]
 [connection signal="timeout" from="DownloadUpdateTimer" to="." method="UpdateDownloadProgress"]

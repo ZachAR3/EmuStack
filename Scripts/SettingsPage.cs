@@ -1,27 +1,23 @@
 using Godot;
+using System;
+using System.Threading.Tasks;
 
 
-public partial class SettingsPage : Node
+public partial class SettingsPage : Control
 {
-	[Export()] private ModManager _modManager;
-	[Export()] private LineEdit _githubTokenLineEdit;
-
-	[Export()] private CheckBox _getCompatibleVersionsButton;
-	[Export()] private OptionButton _displayModeButton;
+	[Export] private ModManager _modManager;
+	[Export] private OptionButton _displayModeButton;
 
 
 	private void Initiate()
 	{
-		_getCompatibleVersionsButton.ButtonPressed = Globals.Instance.Settings.GetCompatibleVersions;
 		_displayModeButton.Selected = _displayModeButton.GetItemIndex(Globals.Instance.Settings.DisplayMode);
 	}
-	
-	
-	// Signal functions
+
+
 	private async void ResetSettingsPressed()
 	{
-		var confirm = await Tools.Instance.ConfirmationPopup();
-		if (confirm != true)
+		if (!await Tools.Instance.ConfirmationPopup())
 		{
 			return;
 		}
@@ -33,28 +29,11 @@ public partial class SettingsPage : Node
 
 	private async void ResetInstalledModsPressed()
 	{
-		var confirm = await Tools.Instance.ConfirmationPopup();
-		if (confirm != true)
+		if (!await Tools.Instance.ConfirmationPopup())
 		{
 			return;
 		}
 		_modManager.ResetInstalled();
-	}
-
-
-	private void GithubTokenEntered(string token)
-	{
-		Globals.Instance.Settings.GithubApiToken = token;
-		Globals.Instance.SaveManager.WriteSave();
-		Globals.Instance.AuthenticateGithubClient();
-		_githubTokenLineEdit.Text = "Success!";
-	}
-
-
-	private void GetCompatibleToggled(bool getCompatible)
-	{
-		Globals.Instance.Settings.GetCompatibleVersions = getCompatible;
-		Globals.Instance.SaveManager.WriteSave();
 	}
 
 

@@ -1,38 +1,32 @@
 using Godot;
 using System;
-using NativeFileDialogSharp;
+
 
 public partial class ToolsPage : Control
 {
-	[ExportGroup("Tools")] 
-	[Export()] private Button _clearInstallFolderButton;
-	[Export()] private Button _backupSavesButton;
-	[Export()] private Button _restoreSavesButton;
-	[Export()] private Button _fromSaveDirectoryButton;
-	[Export()] private Button _toSaveDirectoryButton;
-	
-	private string _osUsed = OS.GetName();
-	
-	
-	// Godot Functions
+	[ExportGroup("Tools")]
+	[Export] private Button _clearInstallFolderButton;
+	[Export] private Button _backupSavesButton;
+	[Export] private Button _restoreSavesButton;
+	[Export] private Button _fromSaveDirectoryButton;
+	[Export] private Button _toSaveDirectoryButton;
+
+
 	private void Initiate()
 	{
 		_fromSaveDirectoryButton.Text = Globals.Instance.CurrentProviderSettings.FromSaveDirectory;
 		_toSaveDirectoryButton.Text = Globals.Instance.CurrentProviderSettings.ToSaveDirectory;
 	}
-	
-	
-	// Signal functions
+
+
 	private async void ClearInstallFolderButtonPressed()
 	{
-		var confirm = await Tools.Instance.ConfirmationPopup();
-		if (confirm == false)
+		if (!await Tools.Instance.ConfirmationPopup())
 		{
 			return;
 		}
-		
-		// Clears the install folder, if failed notifies user
-		if (!Tools.Instance.ClearInstallationFolder(Globals.Instance.CurrentProviderSettings.SaveDirectory))
+
+		if (!FsHelpers.DeleteDirectoryContents(Globals.Instance.CurrentProviderSettings.SaveDirectory))
 		{
 			Tools.Instance.AddError("failed to clear installation folder");
 			_clearInstallFolderButton.Text = "Clear failed!";
@@ -42,23 +36,22 @@ public partial class ToolsPage : Control
 			_clearInstallFolderButton.Text = "Cleared successfully!";
 		}
 	}
-	
-	
+
+
 	private void OnBackupSavesButtonPressed()
 	{
 		try
 		{
-			Tools.Instance.DuplicateDirectoryContents(
+			FsHelpers.DuplicateDirectoryContents(
 				Globals.Instance.CurrentProviderSettings.FromSaveDirectory,
 				Globals.Instance.CurrentProviderSettings.ToSaveDirectory,
 				true);
 			_backupSavesButton.Text = "Backup successful!";
 		}
 		catch (Exception backupError)
-		{ 
+		{
 			Tools.Instance.AddError("failed to create save backup exception:" + backupError);
 		}
-
 	}
 
 
@@ -66,7 +59,7 @@ public partial class ToolsPage : Control
 	{
 		try
 		{
-			Tools.Instance.DuplicateDirectoryContents(
+			FsHelpers.DuplicateDirectoryContents(
 				Globals.Instance.CurrentProviderSettings.ToSaveDirectory,
 				Globals.Instance.CurrentProviderSettings.FromSaveDirectory,
 				true);
@@ -77,31 +70,35 @@ public partial class ToolsPage : Control
 			Tools.Instance.AddError("failed to restore saves, exception: " + restoreError);
 		}
 	}
-	
-	
-	private void OnFromSaveDirectoryButtonPressed()
+
+
+	private async void OnFromSaveDirectoryButtonPressed()
 	{
-		var fromSaveDirectoryInput = Dialog.FolderPicker(Globals.Instance.CurrentProviderSettings.FromSaveDirectory).Path;
-		if (fromSaveDirectoryInput != null)
+		var settings = Globals.Instance.CurrentProviderSettings;
+		var picked = await Tools.Instance.PickFolder(settings.FromSaveDirectory);
+		if (picked == null)
 		{
-			Globals.Instance.CurrentProviderSettings.FromSaveDirectory = fromSaveDirectoryInput;
+			return;
 		}
 
-		_fromSaveDirectoryButton.Text = Globals.Instance.CurrentProviderSettings.FromSaveDirectory;
+		settings.FromSaveDirectory = picked;
 		Globals.Instance.SyncCurrentProviderSettings();
-	}
-	
-	private void OnToSaveDirectoryButtonPressed()
-	{
-		var toSaveDirectoryInput = Dialog.FolderPicker(Globals.Instance.CurrentProviderSettings.ToSaveDirectory).Path;
-		if (toSaveDirectoryInput != null)
-		{
-			Globals.Instance.CurrentProviderSettings.ToSaveDirectory = toSaveDirectoryInput;
-		}
-
-		_toSaveDirectoryButton.Text = Globals.Instance.CurrentProviderSettings.ToSaveDirectory;
-		Globals.Instance.SyncCurrentProviderSettings();
+		_fromSaveDirectoryButton.Text = settings.FromSaveDirectory;
 	}
 
 
+	private async void OnToSaveDirectoryButtonPressed()
+	{
+		var settings = Globals.Instance.CurrentProviderSettings;
+		var picked = await Tools.Instance.PickFolder(settings.ToSaveDirectory);
+		if (picked == null)
+		{
+			return;
+		}
+
+		settings.ToSaveDirectory = picked;
+		Globals.Instance.SyncCurrentProviderSettings();
+		_toSaveDirectoryButton.Text = settings.ToSaveDirectory;
+	}
 }
+
