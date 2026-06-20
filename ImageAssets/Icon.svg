@@ -1,15 +1,31 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <defs>
-    <linearGradient id="stack-gradient" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#00e4cb" />
-      <stop offset="100%" stop-color="#0a84ff" />
-    </linearGradient>
-  </defs>
-  <rect width="512" height="512" rx="112" fill="#0d0f11" />
-  <g fill="url(#stack-gradient)">
-    <path d="M96 320 h320 a24 24 0 0 1 24 24 v40 a24 24 0 0 1 -24 24 H96 a24 24 0 0 1 -24 -24 v-40 a24 24 0 0 1 24 -24 z" />
-    <path d="M136 224 h240 a24 24 0 0 1 24 24 v40 a24 24 0 0 1 -24 24 H136 a24 24 0 0 1 -24 -24 v-40 a24 24 0 0 1 24 -24 z" />
-    <path d="M176 128 h160 a24 24 0 0 1 24 24 v40 a24 24 0 0 1 -24 24 H176 a24 24 0 0 1 -24 -24 v-40 a24 24 0 0 1 24 -24 z" />
+  <rect width="512" height="512" rx="112" fill="#0d0f11"/>
+  <!-- Xbox -->
+  <rect x="126" y="55" width="260" height="90" rx="18" fill="#107c10"/>
+  <rect x="162" y="85" width="7" height="30" rx="2" fill="#f5f5f5"/><rect x="150" y="97" width="30" height="7" rx="2" fill="#f5f5f5"/>
+  <circle cx="256" cy="100" r="14" fill="#f5f5f5"/><line x1="246" y1="90" x2="266" y2="110" stroke="#107c10" stroke-width="3.5" stroke-linecap="round"/><line x1="246" y1="110" x2="266" y2="90" stroke="#107c10" stroke-width="3.5" stroke-linecap="round"/>
+  <circle cx="340" cy="91" r="5.5" fill="#f5f5f5"/><circle cx="349" cy="100" r="5.5" fill="#f5f5f5"/><circle cx="340" cy="109" r="5.5" fill="#f5f5f5"/><circle cx="331" cy="100" r="5.5" fill="#f5f5f5"/>
+
+  <!-- TV + Joy-Cons, centered -->
+  <g transform="translate(111, 190)">
+    <rect x="65" y="0" width="160" height="110" rx="12" fill="#283034"/>
+    <rect x="75" y="10" width="140" height="90" rx="8" fill="#0d0f11"/>
+    <rect x="125" y="110" width="40" height="10" rx="3" fill="#40464d"/>
+    <rect x="105" y="118" width="80" height="8" rx="3" fill="#40464d"/>
+    <rect x="0" y="5" width="55" height="110" rx="14" fill="#e60012"/>
+    <rect x="235" y="5" width="55" height="110" rx="14" fill="#00e4cb"/>
+    <rect x="24" y="33" width="6" height="24" rx="2" fill="#f5f5f5"/><rect x="15" y="42" width="24" height="6" rx="2" fill="#f5f5f5"/>
+    <circle cx="262" cy="28" r="4" fill="#f5f5f5"/>
+    <circle cx="252" cy="37" r="4" fill="#f5f5f5"/>
+    <circle cx="272" cy="37" r="4" fill="#f5f5f5"/>
+    <circle cx="262" cy="46" r="4" fill="#f5f5f5"/>
+    <circle cx="27" cy="82" r="8" fill="#0d0f11"/>
+    <circle cx="262" cy="82" r="8" fill="#0d0f11"/>
   </g>
+
+  <!-- PlayStation -->
+  <rect x="126" y="335" width="260" height="90" rx="18" fill="#00439c"/>
+  <rect x="162" y="365" width="7" height="30" rx="2" fill="#f5f5f5"/><rect x="150" y="377" width="30" height="7" rx="2" fill="#f5f5f5"/>
+  <path d="M340 360 l5.5 9.5 h-11 z" fill="#f5f5f5"/><circle cx="355" cy="379" r="5.5" fill="none" stroke="#f5f5f5" stroke-width="2.5"/><line x1="334" y1="391" x2="346" y2="403" stroke="#f5f5f5" stroke-width="2.5" stroke-linecap="round"/><line x1="334" y1="403" x2="346" y2="391" stroke="#f5f5f5" stroke-width="2.5" stroke-linecap="round"/><rect x="319" y="373" width="12" height="12" fill="none" stroke="#f5f5f5" stroke-width="2.5" rx="1"/>
 </svg>
