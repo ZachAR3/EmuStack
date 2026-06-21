@@ -76,33 +76,44 @@ public partial class Installer : Control
 			return;
 		}
 
-		string selectedVersion;
-		if (_customVersionCheckBox.ButtonPressed)
+		try
 		{
-			if (!AppMode.SupportsCustomVersions)
+			string selectedVersion;
+			if (_customVersionCheckBox.ButtonPressed)
 			{
-				Tools.Instance.AddError($"{AppMode.Name} does not support custom version downloads.");
-				return;
-			}
+				if (!AppMode.SupportsCustomVersions)
+				{
+					Tools.Instance.AddError($"{AppMode.Name} does not support custom version downloads.");
+					return;
+				}
 
-			if (string.IsNullOrWhiteSpace(_customVersionLineEdit.Text))
-			{
-				Tools.Instance.AddError("Invalid version selected, please enter a valid version number.");
-				return;
+				if (string.IsNullOrWhiteSpace(_customVersionLineEdit.Text))
+				{
+					Tools.Instance.AddError("Invalid version selected, please enter a valid version number.");
+					return;
+				}
+				selectedVersion = _customVersionLineEdit.Text.Trim();
 			}
-			selectedVersion = _customVersionLineEdit.Text.Trim();
+			else
+			{
+				selectedVersion = _versionButton.GetItemMetadata(_versionButton.Selected).AsString();
+			}
+			await InstallVersion(selectedVersion);
 		}
-		else
+		catch (Exception installError)
 		{
-			selectedVersion = _versionButton.GetItemMetadata(_versionButton.Selected).AsString();
+			Tools.Instance.AddError($"Failed to start {AppMode.Name} install: {installError.Message}");
+			ResetDownloadControls();
 		}
-		await InstallVersion(selectedVersion);
 	}
 
 
 	private async Task InstallVersion(string version)
 	{
-		_activeDownloadRelease = await AppMode.GetRelease(
+		// The list of releases was already fetched by AddVersions; use the cached
+		// release when possible so the user isn't left waiting before the download
+		// progress appears. Fall back to GetRelease for custom versions.
+		_activeDownloadRelease = FindReleaseInCache(version) ?? await AppMode.GetRelease(
 			version,
 			Globals.Instance.HttpClient,
 			_os,
@@ -149,7 +160,7 @@ public partial class Installer : Control
 	}
 
 
-	private void VersionDownloadCompleted(long result, long responseCode, string[] headers, byte[] body)
+	private async void VersionDownloadCompleted(long result, long responseCode, string[] headers, byte[] body)
 	{
 		_downloadUpdateTimer.Stop();
 		ResetDownloadControls();
@@ -158,6 +169,7 @@ public partial class Installer : Control
 		{
 			Tools.Instance.AddError($"Failed to download {AppMode.Name}, result: {result}, HTTP status: {responseCode}");
 			_downloadProgressBar.Value = 0;
+			_downloadWindow.Visible = false;
 			return;
 		}
 
@@ -170,7 +182,6 @@ public partial class Installer : Control
 		UnpackAndSetPermissions();
 		if (_createShortcutButton.ButtonPressed)
 		{
-			_downloadWindow.Visible = false;
 			CreateShortcut();
 		}
 
@@ -180,6 +191,14 @@ public partial class Installer : Control
 		}
 
 		Globals.Instance.SyncCurrentProviderSettings();
+
+		// Let the user see the success message before hiding the overlay.
+		// Guard against the node being freed during the wait (e.g. provider switch).
+		await ToSignal(GetTree().CreateTimer(2), "timeout");
+		if (IsInstanceValid(this) && IsInstanceValid(_downloadWindow))
+		{
+			_downloadWindow.Visible = false;
+		}
 	}
 
 
@@ -310,6 +329,14 @@ public partial class Installer : Control
 	}
 
 
+	private ProviderRelease FindReleaseInCache(string version)
+	{
+		return _availableReleases?.FirstOrDefault(release =>
+			string.Equals(release.Version, version, StringComparison.OrdinalIgnoreCase) ||
+			string.Equals(release.DisplayName, version, StringComparison.OrdinalIgnoreCase));
+	}
+
+
 	private int GetVersionButtonIndex(string version)
 	{
 		for (var itemIndex = 0; itemIndex < _versionButton.ItemCount; itemIndex++)
@@ -327,6 +354,7 @@ public partial class Installer : Control
 	private void UnpackAndSetPermissions()
 	{
 		var downloadPath = Path.Join(ProviderSettings.SaveDirectory, _downloadFileName);
+
 		if (AppMode.IsSingleFileDownload(_os))
 		{
 			if (_os == OsKind.Linux)
@@ -339,19 +367,19 @@ public partial class Installer : Control
 			return;
 		}
 
-		if (!_autoUnpackButton.ButtonPressed && !_autoUpdate)
-		{
-			return;
-		}
-
+		// macOS DMGs ship as a mountable image; we don't have a clean way to mount,
+		// copy, and detach without elevated permissions, so leave the file in place
+		// and point ExecutablePath at it. Launch will surface a clear error.
 		if (downloadPath.EndsWith(".dmg", StringComparison.OrdinalIgnoreCase))
 		{
-			// macOS DMGs ship as a mountable image; we don't have a clean way to mount,
-			// copy, and detach without elevated permissions, so leave the file in place
-			// and point ExecutablePath at it. Launch will surface a clear error.
 			ProviderSettings.ExecutablePath = downloadPath;
 			Globals.Instance.SyncCurrentProviderSettings();
 			Tools.Instance.AddError("Downloaded a macOS DMG. Mount it manually and launch the bundled app — automatic unpack is not supported.");
+			return;
+		}
+
+		if (!_autoUnpackButton.ButtonPressed && !_autoUpdate)
+		{
 			return;
 		}
 

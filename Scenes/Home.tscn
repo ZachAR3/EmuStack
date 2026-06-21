@@ -36,7 +36,7 @@ border_width_right = 3
 border_width_bottom = 3
 border_color = Color(0.8, 0.8, 0.8, 0)
 
-[node name="Home" type="Control" node_paths=PackedStringArray("_appModesButton", "_darkBg", "_lightBg", "_downloadWindowApp", "_enableLightTheme", "_header", "_headerLabel", "_latestVersionLabel", "_modList", "_modManagerLoadingSprite", "_modManagerLoadingLabel") groups=["Initiate"]]
+[node name="Home" type="Control" node_paths=PackedStringArray("_appModesButton", "_darkBg", "_downloadLabel", "_downloadWindowApp", "_enableLightTheme", "_header", "_headerLabel", "_latestVersionLabel", "_lightBg", "_modList", "_modManagerLoadingLabel", "_modManagerLoadingSprite") groups=["Initiate"]]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -50,6 +50,7 @@ script = ExtResource("1_p51ic")
 _appModesButton = NodePath("Header/Option/OptionButton")
 _darkBg = NodePath("DarkBG")
 _lightBg = NodePath("LightBG")
+_downloadLabel = NodePath("Pages/Installer/DownloadWindow/Window/DownloadLabelBox")
 _downloadWindowApp = NodePath("Pages/Installer/DownloadWindow/Window")
 _enableLightTheme = NodePath("Header/Option/LightMode")
 _themes = Array[Theme]([ExtResource("1_c22a4"), ExtResource("3_a1ctt")])
@@ -198,17 +199,13 @@ visible = false
 layout_mode = 2
 _modManager = NodePath("../ModManager")
 
-[node name="ConfirmPopup" type="PopupMenu" parent="."]
-title = "Are you sure you?"
-initial_position = 1
-size = Vector2i(600, 100)
-borderless = false
+[node name="ConfirmPopup" type="ConfirmationDialog" parent="."]
+title = "Confirm"
+initial_position = 2
+size = Vector2i(400, 150)
 always_on_top = true
-item_count = 2
-item_0/text = "Confirm"
-item_0/id = 0
-item_1/text = "Cancel"
-item_1/id = 1
+dialog_text = "Are you sure?"
+ok_button_text = "Confirm"
 
 [node name="ErrorConsole" parent="." instance=ExtResource("14_1b731")]
 visible = false

@@ -9,6 +9,7 @@ public partial class Home : Control
 	[Export] private TextureRect _darkBg;
 	[Export] private TextureRect _lightBg;
 	[Export] private ColorRect _downloadWindowApp;
+	[Export] private Label _downloadLabel;
 	[Export] private CheckButton _enableLightTheme;
 	[Export] private Array<Theme> _themes;
 	[Export] private ColorRect _header;
@@ -132,6 +133,7 @@ public partial class Home : Control
 		_modList.IconScale = scaleRatio;
 		_modManagerLoadingSprite.Scale = new Vector2(scaleRatio, scaleRatio);
 		_modManagerLoadingLabel.AddThemeFontSizeOverride("font_size", (int)(scaleRatio * loadingFontSize));
+		_downloadLabel.AddThemeFontSizeOverride("font_size", (int)(scaleRatio * loadingFontSize));
 		_headerLabel.AddThemeFontSizeOverride("font_size", (int)(scaleRatio * headerFontSize));
 		_latestVersionLabel.AddThemeFontSizeOverride("font_size", (int)(scaleRatio * versionFontSize));
 		_currentTheme.DefaultFontSize = Mathf.Clamp((int)(scaleRatio * defaultFontSize), minDefaultFont, maxDefaultFont);

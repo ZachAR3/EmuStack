@@ -11,7 +11,7 @@ public partial class Tools : Node
 	[Export] private Control _errorConsoleContainer;
 	[Export] private TextEdit _errorConsole;
 	[Export] private RichTextLabel _errorNotifier;
-	[Export] private PopupMenu _confirmationPopup;
+	[Export] private ConfirmationDialog _confirmationPopup;
 
 	public static Tools Instance;
 
@@ -23,10 +23,10 @@ public partial class Tools : Node
 	public override void _Ready()
 	{
 		Instance = this;
-		_confirmationPopup.IndexPressed += OnConfirmationPressed;
-		// Resolve any in-flight popup as cancelled when it hides without a click
-		// (Escape, click-outside) so awaiters never leak.
-		_confirmationPopup.PopupHide += () => _confirmationSource?.TrySetResult(false);
+		_confirmationPopup.Confirmed += () => _confirmationSource?.TrySetResult(true);
+		// Canceled covers the Cancel button, Escape, and the window close button,
+		// so awaiters never leak.
+		_confirmationPopup.Canceled += () => _confirmationSource?.TrySetResult(false);
 
 		// Godot's built-in FileDialog works on all platforms with no native deps.
 		// UseNativeDialog uses the OS native picker on Windows/macOS when available.
@@ -76,12 +76,15 @@ public partial class Tools : Node
 	}
 
 
-	public Task<bool> ConfirmationPopup(string titleText = "Are you sure?")
+	public Task<bool> ConfirmationPopup(string message = "Are you sure?")
 	{
 		// Resolve any prior popup as cancelled before opening a new one.
 		_confirmationSource?.TrySetResult(false);
 		_confirmationSource = new TaskCompletionSource<bool>();
-		_confirmationPopup.Title = titleText;
+		_confirmationPopup.DialogText = message;
+		// Window-based popups don't inherit Control themes; sync from parent so
+		// the dialog matches the rest of the UI (font size, colors, styles).
+		SyncThemeFromParent(_confirmationPopup);
 		_confirmationPopup.PopupCentered();
 		return _confirmationSource.Task;
 	}
@@ -103,8 +106,23 @@ public partial class Tools : Node
 			_folderDialog.CurrentDir = current;
 		}
 
+		SyncThemeFromParent(_folderDialog);
 		_folderDialog.PopupCentered();
 		return _folderPickerSource.Task;
+	}
+
+
+	/// <summary>
+	/// Window-based popups (ConfirmationDialog, FileDialog) don't inherit the
+	/// theme from a parent Control. This copies the parent's theme so popup
+	/// fonts and styles match the rest of the UI.
+	/// </summary>
+	private void SyncThemeFromParent(Window popup)
+	{
+		if (GetParent() is Control parent && parent.Theme != null)
+		{
+			popup.Theme = parent.Theme;
+		}
 	}
 
 
@@ -133,12 +151,6 @@ public partial class Tools : Node
 		}
 
 		_errorNotifier.Visible = false;
-	}
-
-
-	private void OnConfirmationPressed(long itemIndex)
-	{
-		_confirmationSource?.TrySetResult(itemIndex == 0);
 	}
 
 

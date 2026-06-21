@@ -16,7 +16,7 @@ compatibility/default_parent_skeleton_in_mesh_instance_3d=true
 
 config/name="EmuStack"
 run/main_scene="res://Scenes/Home.tscn"
-config/features=PackedStringArray("4.6", "C#", "Forward Plus")
+config/features=PackedStringArray("4.7", "C#", "Forward Plus")
 boot_splash/bg_color=Color(0.0431373, 0.0470588, 0.0509804, 1)
 boot_splash/stretch_mode=0
 boot_splash/image="res://ImageAssets/SplashScreen.png"
@@ -48,3 +48,4 @@ OpenConsole={
 [rendering]
 
 driver/threads/thread_model=0
+textures/vram_compression/import_etc2_astc=true
