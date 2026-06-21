@@ -9,6 +9,12 @@ public class BananaManager
 {
 	private const string ApiBase = "https://gamebanana.com/apiv11";
 
+	// Subfeed search returns ~30 records per page. Iterate multiple pages so
+	// titles with many entries actually surface matches beyond the first page
+	// (issue #61). Five pages is a sane cap — beyond that the user should be
+	// narrowing their query rather than scanning further.
+	private const int MaxSearchPages = 5;
+
 	private readonly HttpClient _httpClient;
 	private readonly Dictionary<string, int> _gameIdCache = new();
 
@@ -50,7 +56,65 @@ public class BananaManager
 			return new List<Mod>();
 		}
 
-		return await FetchMods(bananaGameId, sourceId, page: 1, searchQuery: query);
+		// Subfeed returns mixed-type records; paginate through results so mods
+		// beyond the first page are included (issue #61). Stop when a page
+		// returns nothing new.
+		var results = new List<Mod>();
+		var seenModIds = new HashSet<string>();
+
+		for (var page = 1; page <= MaxSearchPages; page++)
+		{
+			var pageMods = await FetchMods(bananaGameId, sourceId, page, searchQuery: query);
+			if (pageMods.Count == 0)
+			{
+				break;
+			}
+
+			var addedFromPage = false;
+			foreach (var mod in pageMods)
+			{
+				if (!string.IsNullOrEmpty(mod.ModId) && !seenModIds.Add(mod.ModId))
+				{
+					continue;
+				}
+
+				results.Add(mod);
+				addedFromPage = true;
+			}
+
+			if (!addedFromPage)
+			{
+				break;
+			}
+		}
+
+		return results;
+	}
+
+
+	/// <summary>
+	/// Looks up an online source for a locally-installed (unmanaged) mod by name,
+	/// so it can be treated as a managed mod going forward (issue #40). Returns the
+	/// match only when unambiguous: an exact name match, or a single search result.
+	/// </summary>
+	public async Task<Mod> FindOnlineSource(string gameId, Dictionary<string, string> installedGames, string modName, int sourceId)
+	{
+		if (string.IsNullOrWhiteSpace(modName))
+		{
+			return null;
+		}
+
+		var results = await SearchMods(gameId, installedGames, sourceId, modName);
+		if (results.Count == 0)
+		{
+			return null;
+		}
+
+		var exact = results.FirstOrDefault(r =>
+			string.Equals(r.ModName?.Trim(), modName.Trim(), StringComparison.OrdinalIgnoreCase));
+
+		// Only auto-link when unambiguous to avoid attaching the wrong source.
+		return exact ?? (results.Count == 1 ? results[0] : null);
 	}
 
 

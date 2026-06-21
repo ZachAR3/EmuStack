@@ -315,6 +315,13 @@ layout_mode = 2
 size_flags_vertical = 8
 text = "Load more"
 
+[node name="LinkOnline" type="Button" parent="MainLayout/ContentRow/SideBar"]
+layout_mode = 2
+tooltip_text = "Search GameBanana for an online source matching the selected locally-installed mod, so it can be updated as a managed mod."
+text = "Link online source"
+text_overrun_behavior = 4
+clip_text = true
+
 [node name="DownloadBar" type="ProgressBar" parent="MainLayout"]
 custom_minimum_size = Vector2(0, 30)
 layout_mode = 2
@@ -379,6 +386,7 @@ metadata/_edit_use_anchors_ = true
 [connection signal="pressed" from="MainLayout/ContentRow/SideBar/UpdateSelected" to="." method="UpdateSelectedPressed"]
 [connection signal="pressed" from="MainLayout/ContentRow/SideBar/ClearMods" to="." method="ClearModsPressed"]
 [connection signal="pressed" from="MainLayout/ContentRow/SideBar/LoadMore" to="." method="LoadNextPage"]
+[connection signal="pressed" from="MainLayout/ContentRow/SideBar/LinkOnline" to="." method="LinkOnlinePressed"]
 [connection signal="text_changed" from="MainLayout/SearchBar" to="." method="SearchUpdated"]
 [connection signal="item_activated" from="MainLayout/ContentRow/ModsList" to="." method="ModClicked"]
 [connection signal="timeout" from="DownloadUpdateTimer" to="." method="UpdateDownloadProgress"]

@@ -342,7 +342,7 @@ public partial class ModManager : Control
 
 	private async void LoadNextPage()
 	{
-		if (_isSearchMode)
+		if (_isSearchMode || string.IsNullOrEmpty(_currentGameId))
 		{
 			return;
 		}
@@ -651,6 +651,10 @@ public partial class ModManager : Control
 	private async void ClearMods(string gameId = "")
 	{
 		gameId = string.IsNullOrEmpty(gameId) ? _currentGameId : gameId;
+		if (!_installedMods.ContainsKey(gameId))
+		{
+			return;
+		}
 
 		try
 		{
@@ -853,15 +857,22 @@ public partial class ModManager : Control
 
 	private async void UpdateSelectedPressed()
 	{
-		foreach (var mod in _installedMods[_currentGameId])
+		if (!_installedMods.TryGetValue(_currentGameId, out var installedMods))
 		{
-			var selectedMods = _modList.GetSelectedItems();
-			if (selectedMods.Length <= 0)
-			{
-				return;
-			}
+			return;
+		}
 
-			if ((string)_modList.GetItemMetadata(selectedMods.First()) == mod.ModName)
+		var selectedMods = _modList.GetSelectedItems();
+		if (selectedMods.Length <= 0)
+		{
+			return;
+		}
+
+		var selectedModName = (string)_modList.GetItemMetadata(selectedMods.First());
+
+		foreach (var mod in installedMods)
+		{
+			if (selectedModName == mod.ModName)
 			{
 				DisableInteraction();
 				if (mod.ModUrl != null)
@@ -870,13 +881,84 @@ public partial class ModManager : Control
 				}
 				else
 				{
-					Tools.Instance.AddError("Cannot update local mod...");
+					// Local unmanaged mod: look up an online source by name so the
+					// mod becomes managed and can be updated in future (issue #40).
+					// Falls back to the dedicated Link Online flow.
+					await LinkLocalModOnline(_currentGameId, mod);
 				}
 
 				SelectGame(_gamePickerButton.Selected);
 				DisableInteraction(false);
 				return;
 			}
+		}
+	}
+
+
+	/// <summary>
+	/// Searches GameBanana for an online source matching a locally-installed
+	/// (unmanaged) mod by name. If an unambiguous match is found, attaches the
+	/// ModUrl/ModId/Source to the installed mod and persists it (issue #40).
+	/// </summary>
+	private async Task LinkLocalModOnline(string gameId, Mod mod)
+	{
+		if (!await Tools.Instance.ConfirmationPopup($"Search GameBanana for an online source for '{mod.ModName}'?"))
+		{
+			return;
+		}
+
+		var match = await _bananaManager.FindOnlineSource(gameId, _installedGames, mod.ModName, (int)Sources.Banana);
+		if (match == null)
+		{
+			Tools.Instance.AddError($"Could not find an unambiguous online source for '{mod.ModName}'.");
+			return;
+		}
+
+		mod.ModId = match.ModId;
+		mod.ModUrl = match.ModUrl;
+		mod.Source = match.Source;
+		if (match.CompatibleVersions != null && match.CompatibleVersions.Count > 0)
+		{
+			mod.CompatibleVersions = match.CompatibleVersions;
+		}
+
+		SaveInstalledMods();
+	}
+
+
+	private async void LinkOnlinePressed()
+	{
+		if (_currentGameId == null || !_installedMods.TryGetValue(_currentGameId, out var installedMods))
+		{
+			return;
+		}
+
+		var selectedMods = _modList.GetSelectedItems();
+		if (selectedMods.Length <= 0)
+		{
+			Tools.Instance.AddError("Select an installed local mod first.");
+			return;
+		}
+
+		var selectedModName = (string)_modList.GetItemMetadata(selectedMods.First());
+		foreach (var mod in installedMods)
+		{
+			if (selectedModName != mod.ModName)
+			{
+				continue;
+			}
+
+			if (mod.ModUrl != null)
+			{
+				Tools.Instance.AddError($"'{mod.ModName}' is already linked to an online source.");
+				return;
+			}
+
+			DisableInteraction();
+			await LinkLocalModOnline(_currentGameId, mod);
+			SelectGame(_gamePickerButton.Selected);
+			DisableInteraction(false);
+			return;
 		}
 	}
 
