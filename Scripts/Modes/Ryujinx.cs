@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Runtime.InteropServices;
@@ -44,17 +45,17 @@ public class ModeRyubing : Mode
 		OsKind os,
 		string releaseChannel)
 	{
-		var releases = await FetchAllForgejoReleases(httpClient, os);
-		if (releases.Count > 0)
+		// Prefer the update server: it's the official lightweight path and offloads
+		// the Forgejo frontend. It returns only the latest release, but with a
+		// direct download_url so no Forgejo asset lookup is needed.
+		var latest = await TryGetLatestFromUpdateServer(httpClient, os, releaseChannel);
+		if (latest != null)
 		{
-			return releases;
+			return new List<ProviderRelease> { latest };
 		}
 
-		// Fall back to the update server if the Forgejo API is unreachable.
-		var latest = await GetLatestRelease(httpClient, os, releaseChannel);
-		return latest == null
-			? new List<ProviderRelease>()
-			: new List<ProviderRelease> { latest };
+		// Update server unreachable — silently fall back to the Forgejo API.
+		return await FetchAllForgejoReleases(httpClient, os);
 	}
 
 	public override async Task<ProviderRelease> GetLatestRelease(
@@ -62,32 +63,8 @@ public class ModeRyubing : Mode
 		OsKind os,
 		string releaseChannel)
 	{
-		// The update server handles version pinning and channel selection, so try it
-		// first for the "latest" determination. The Forgejo API is the source of truth
-		// for asset URLs.
-		var channel = NormalizeChannel(releaseChannel);
-		var osToken = GetOsToken(os);
-		var archToken = GetArchToken();
-
-		var updateServerUrl = $"{UpdateServerBaseUrl}/latest/query?os={osToken}&arch={archToken}&rc={channel}";
-		var versionTag = await TryGetLatestTagFromUpdateServer(httpClient, updateServerUrl);
-
-		if (!string.IsNullOrEmpty(versionTag))
-		{
-			var release = await FetchForgejoRelease(httpClient, os, versionTag);
-			if (release != null)
-			{
-				return release;
-			}
-
-			// The tag was found but the Forgejo API couldn't resolve assets — construct
-			// a release from the known naming convention as a last resort.
-			return BuildReleaseFromConvention(versionTag, os);
-		}
-
-		// Update server is down — fall back to listing all Forgejo releases and taking the first.
-		var releases = await FetchAllForgejoReleases(httpClient, os);
-		return releases.FirstOrDefault();
+		return await TryGetLatestFromUpdateServer(httpClient, os, releaseChannel)
+		       ?? (await FetchAllForgejoReleases(httpClient, os)).FirstOrDefault();
 	}
 
 	public override ProviderRelease BuildCustomRelease(string version, OsKind os, string releaseChannel)
@@ -100,7 +77,50 @@ public class ModeRyubing : Mode
 		=> new[] { "publish" };
 
 
-	private static async Task<string> TryGetLatestTagFromUpdateServer(HttpClient httpClient, string url)
+	/// <summary>
+	/// Asks the update server for the latest release. If the server responds,
+	/// uses its direct download_url without touching Forgejo. Falls back to
+	/// Forgejo asset resolution only when the update server omits a download URL
+	/// or is unreachable.
+	/// </summary>
+	private static async Task<ProviderRelease> TryGetLatestFromUpdateServer(
+		HttpClient httpClient,
+		OsKind os,
+		string releaseChannel)
+	{
+		var channel = NormalizeChannel(releaseChannel);
+		var osToken = GetOsToken(os);
+		var archToken = GetArchToken();
+
+		var url = $"{UpdateServerBaseUrl}/latest/query?os={osToken}&arch={archToken}&rc={channel}";
+		var response = await TryGetUpdateServerResponse(httpClient, url);
+		if (response == null || string.IsNullOrEmpty(response.Tag))
+		{
+			return null;
+		}
+
+		var version = NormalizeVersion(response.Tag);
+
+		// Use the direct download URL when provided — no Forgejo asset lookup needed.
+		if (!string.IsNullOrEmpty(response.DownloadUrl))
+		{
+			return new ProviderRelease
+			{
+				Version = version,
+				DisplayName = version,
+				DownloadUrl = response.DownloadUrl,
+				FileName = GetFileNameFromUrl(response.DownloadUrl),
+			};
+		}
+
+		// Update server returned a tag but no download URL — resolve via Forgejo as a
+		// silent fallback, then convention-based construction as a last resort.
+		return await FetchForgejoRelease(httpClient, os, response.Tag)
+		       ?? BuildReleaseFromConvention(version, os);
+	}
+
+
+	private static async Task<UpdateServerResponse> TryGetUpdateServerResponse(HttpClient httpClient, string url)
 	{
 		try
 		{
@@ -111,16 +131,22 @@ public class ModeRyubing : Mode
 			}
 
 			var json = await response.Content.ReadAsStringAsync();
-			var updateServerResponse = JsonSerializer.Deserialize<UpdateServerResponse>(
-				json, JsonOptions.Default);
-
-			return updateServerResponse?.Tag;
+			return JsonSerializer.Deserialize<UpdateServerResponse>(json, JsonOptions.Default);
 		}
 		catch (HttpRequestException)
 		{
 			return null;
 		}
 	}
+
+
+	private static string GetFileNameFromUrl(string url)
+	{
+		return Uri.TryCreate(url, UriKind.Absolute, out var uri)
+			? Path.GetFileName(uri.LocalPath)
+			: Path.GetFileName(url);
+	}
+
 
 	private static async Task<List<ProviderRelease>> FetchAllForgejoReleases(HttpClient httpClient, OsKind os)
 	{
