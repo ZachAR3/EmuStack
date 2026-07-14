@@ -13,3 +13,5 @@ test.x86_64
 
 # Local debug tooling
 /tools/
+/Tests/bin/
+/Tests/obj/

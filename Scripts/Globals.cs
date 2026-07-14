@@ -1,4 +1,5 @@
 using Godot;
+using System;
 using System.Linq;
 using HttpClient = System.Net.Http.HttpClient;
 using Node = Godot.Node;
@@ -13,7 +14,7 @@ public partial class Globals : Node
 	public ResourceSaveManager SaveManager = new();
 	public SettingsResource Settings = new();
 
-	public readonly HttpClient HttpClient = new();
+	public readonly HttpClient HttpClient = new() { Timeout = TimeSpan.FromSeconds(30) };
 
 
 	public override void _Ready()
@@ -29,43 +30,58 @@ public partial class Globals : Node
 		AppMode = ProviderRegistry.Get(Settings.AppMode);
 		Settings.AppMode = AppMode.Id;
 		MigrateLegacySettings(CurrentProviderSettings);
-		SetDefaultPaths();
+		if (!SetDefaultPaths())
+		{
+			GD.PushError("EmuStack could not persist the initial provider paths; changes may be lost on exit.");
+		}
 
 		Settings.LauncherMode = OS.GetCmdlineArgs().Contains("--launcher");
-		SaveManager.WriteSave();
+		if (!SaveManager.WriteSave())
+		{
+			GD.PushError("EmuStack could not persist startup settings; changes may be lost on exit.");
+		}
 	}
 
 
 	public ProviderSettingsResource CurrentProviderSettings => Settings.GetProviderSettings(AppMode.Id);
 
 
-	public void SetDefaultPaths()
+	public bool SetDefaultPaths()
 	{
 		foreach (var provider in ProviderRegistry.Providers)
 		{
 			ApplyProviderDefaults(provider, Settings.GetProviderSettings(provider.Id));
 		}
 
-		SaveManager.WriteSave(Settings);
+		return SaveManager.WriteSave(Settings);
 	}
 
 
-	public void SetAppMode(string providerId, bool persist = true)
+	public bool SetAppMode(string providerId, bool persist = true)
 	{
+		var previousMode = AppMode;
+		var previousProviderId = Settings.AppMode;
 		AppMode = ProviderRegistry.Get(providerId);
 		Settings.AppMode = AppMode.Id;
 		MigrateLegacySettings(CurrentProviderSettings);
 		ApplyProviderDefaults(AppMode, CurrentProviderSettings);
 		if (persist)
 		{
-			SaveManager.WriteSave(Settings);
+			if (!SaveManager.WriteSave(Settings))
+			{
+				AppMode = previousMode;
+				Settings.AppMode = previousProviderId;
+				return false;
+			}
 		}
+
+		return true;
 	}
 
 
-	public void SyncCurrentProviderSettings()
+	public bool SyncCurrentProviderSettings()
 	{
-		SaveManager.WriteSave(Settings);
+		return SaveManager.WriteSave(Settings);
 	}
 
 

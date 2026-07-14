@@ -56,6 +56,15 @@ public partial class Home : Control
 
 	private void SetTheme(bool enableLight)
 	{
+		var previousLightMode = Settings.LightModeEnabled;
+		Settings.LightModeEnabled = enableLight;
+		if (!Globals.Instance.SaveManager.WriteSave(Settings))
+		{
+			Settings.LightModeEnabled = previousLightMode;
+			enableLight = previousLightMode;
+			Tools.Instance?.AddError("Failed to persist the selected theme; the previous theme was retained.");
+		}
+
 		_lightBg.Visible = enableLight;
 		_darkBg.Visible = !enableLight;
 		_currentTheme = enableLight ? _themes[1] : _themes[0];
@@ -63,8 +72,6 @@ public partial class Home : Control
 		_header.Color = barColor;
 		_downloadWindowApp.Color = barColor;
 		_enableLightTheme.ButtonPressed = enableLight;
-		Settings.LightModeEnabled = enableLight;
-		Globals.Instance.SaveManager.WriteSave(Settings);
 		Theme = _currentTheme;
 	}
 
@@ -98,7 +105,10 @@ public partial class Home : Control
 				: Globals.Instance.ProviderRegistry.DefaultProvider.Id;
 		}
 
-		Globals.Instance.SetAppMode(providerId);
+		if (!Globals.Instance.SetAppMode(providerId))
+		{
+			Tools.Instance?.AddError("Failed to persist the selected emulator provider; the previous provider was retained.");
+		}
 		for (var itemIndex = 0; itemIndex < _appModesButton.ItemCount; itemIndex++)
 		{
 			if (_appModesButton.GetItemMetadata(itemIndex).AsString() == Globals.Instance.AppMode.Id)
@@ -145,4 +155,3 @@ public partial class Home : Control
 		GetTree().Quit();
 	}
 }
-

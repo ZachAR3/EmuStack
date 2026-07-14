@@ -10,6 +10,7 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Button = Godot.Button;
 using ProgressBar = Godot.ProgressBar;
+using CancellationTokenSource = System.Threading.CancellationTokenSource;
 
 
 public partial class ModManager : Control
@@ -60,6 +61,16 @@ public partial class ModManager : Control
 	private BananaManager _bananaManager;
 
 	private int _modsPage = 1;
+	private readonly Dictionary<string, int> _modsPageByGame = new();
+	private readonly HashSet<string> _exhaustedPages = new();
+	private bool _hasMorePages = true;
+	private int _operationGeneration;
+	private int _titleRequestGeneration = -1;
+	private bool _operationInProgress;
+	private Window _rootWindow;
+	private string _legacyInstalledModsPath;
+	private bool _initialized;
+	private readonly CancellationTokenSource _lifetimeCancellation = new();
 	private ProviderSettingsResource ProviderSettings => Globals.Instance.CurrentProviderSettings;
 
 	// Search state. _searchToken is incremented on every keystroke so that stale
@@ -72,43 +83,134 @@ public partial class ModManager : Control
 
 	private async void Initiate()
 	{
-		if (Globals.Instance.Settings.LauncherMode)
+		try
 		{
-			return;
+			if (Globals.Instance.Settings.LauncherMode)
+			{
+				return;
+			}
+
+			// NOTIFICATION_WM_CLOSE_REQUEST is delivered to the root Window, not nested
+			// Controls, so subscribe to the root window's close signal to flush the
+			// installed-mods index when the app is closed.
+			_rootWindow = GetTree().Root;
+			_rootWindow.CloseRequested += OnCloseRequested;
+
+			_bananaManager = new BananaManager(Globals.Instance.HttpClient);
+
+			_legacyInstalledModsPath = ProjectSettings.GlobalizePath(_installedModsPath);
+			var indexDirectory = Path.GetDirectoryName(_legacyInstalledModsPath) ?? ProjectSettings.GlobalizePath("user://");
+			var indexName = Path.GetFileNameWithoutExtension(_legacyInstalledModsPath);
+			_installedModsPath = Path.Join(indexDirectory, $"{indexName}-{Globals.Instance.AppMode.Id}.json");
+			_initialized = true;
+			LoadInstalledIndex();
+
+			_standardModManager.DownloadRequester = _downloadRequester;
+			_standardModManager.DownloadUpdateTimer = _downloadUpdateTimer;
+			AddChild(_standardModManager);
+			_downloadRequester.Timeout = 60;
+			_titleRequester.Timeout = 30;
+
+			_loadMoreButton.Disabled = true;
+
+			_titleRequester.Connect("request_completed", new Callable(this, nameof(GetTitles)));
+
+			_modLocationButton.Text = PadLabel(ProviderSettings.ModsLocation);
+
+			AddSources();
+			if (BeginOperation())
+			{
+				try
+				{
+					await GetGamesAndMods();
+				}
+				finally
+				{
+					EndOperation();
+				}
+			}
 		}
-
-		// NOTIFICATION_WM_CLOSE_REQUEST is delivered to the root Window, not nested
-		// Controls, so subscribe to the root window's close signal to flush the
-		// installed-mods index when the app is closed.
-		GetTree().Root.CloseRequested += () => SaveInstalledMods();
-
-		_bananaManager = new BananaManager(Globals.Instance.HttpClient);
-
-		_installedModsPath = ProjectSettings.GlobalizePath(_installedModsPath);
-
-		_standardModManager.DownloadRequester = _downloadRequester;
-		_standardModManager.DownloadUpdateTimer = _downloadUpdateTimer;
-
-		_loadMoreButton.Disabled = true;
-
-		_titleRequester.Connect("request_completed", new Callable(this, nameof(GetTitles)));
-
-		_modLocationButton.Text = PadLabel(ProviderSettings.ModsLocation);
-
-		AddSources();
-		await GetGamesAndMods();
+		catch (OperationCanceledException)
+		{
+			// Scene-owned work is canceled during provider switches and shutdown.
+		}
+		catch (Exception startupError)
+		{
+			_loadingPanel.Visible = false;
+			Tools.Instance?.AddError($"Failed to initialize mod manager: {startupError.Message}");
+		}
 	}
 
 
-	public void ResetInstalled()
+	public override void _ExitTree()
 	{
+		_lifetimeCancellation.Cancel();
+		_operationGeneration++;
+		_searchToken++;
+		_downloadRequester?.CancelRequest();
+		_titleRequester?.CancelRequest();
+		if (_rootWindow != null)
+		{
+			_rootWindow.CloseRequested -= OnCloseRequested;
+		}
+		if (_initialized && !_operationInProgress)
+		{
+			SaveInstalledMods();
+		}
+	}
+
+
+	private void OnCloseRequested()
+	{
+		if (!_operationInProgress)
+		{
+			SaveInstalledMods();
+		}
+	}
+
+
+	public bool ResetInstalled()
+	{
+		if (_operationInProgress || _lifetimeCancellation.IsCancellationRequested)
+		{
+			Tools.Instance?.AddError("Cannot reset the installed-mod index while another mod operation is running.");
+			return false;
+		}
+		var previousInstalledMods = _installedMods;
 		_installedMods = new Dictionary<string, List<Mod>>();
-		SaveInstalledMods();
+		var scanSucceeded = true;
+		foreach (var gameId in _installedGames.Keys)
+		{
+			if (!GetInstalledMods(gameId, persist: false))
+			{
+				scanSucceeded = false;
+			}
+		}
+		if (!scanSucceeded || !SaveInstalledMods())
+		{
+			_installedMods = previousInstalledMods;
+			return false;
+		}
+		foreach (var gameId in _browseMods.Keys.ToList())
+		{
+			RemoveInstalledFromBrowse(gameId);
+		}
+		if (!string.IsNullOrEmpty(_currentGameId) && IsInstanceValid(_gamePickerButton))
+		{
+			SelectGame(_gamePickerButton.Selected);
+		}
+
+		return true;
 	}
 
 
 	private async Task GetGamesAndMods(Sources source = Sources.Banana, int selectedGame = 0)
 	{
+		var generation = _operationGeneration;
+		if (_lifetimeCancellation.IsCancellationRequested)
+		{
+			return;
+		}
 		_loadingPanel.Visible = true;
 		if (!EnsureModsLocation())
 		{
@@ -116,38 +218,63 @@ public partial class ModManager : Control
 			return;
 		}
 
+		_titleRequester.CancelRequest();
+		_titleRequestGeneration = generation;
 		var requestError = _titleRequester.Request(
 			"https://switchbrew.org/w/index.php?title=Title_list/Games&mobileaction=toggle_view_desktop");
 		if (requestError != Error.Ok)
 		{
-			Tools.Instance.AddError($@"failed to request titles list: {requestError}");
+			Tools.Instance?.AddError($@"failed to request titles list: {requestError}");
 			_loadingPanel.Visible = false;
 			return;
 		}
 
 		// GetTitles fires on completion and populates _titles, including built-in fallbacks.
 		await ToSignal(_titleRequester, "request_completed");
+		if (generation != _operationGeneration || _lifetimeCancellation.IsCancellationRequested)
+		{
+			return;
+		}
 
 		if (_titles.Count <= 0)
 		{
-			Tools.Instance.AddError("Failed to retrieve titles list, check connection and try again later.");
+			Tools.Instance?.AddError("Failed to retrieve titles list, check connection and try again later.");
 			_loadingPanel.Visible = false;
 			return;
 		}
 
 		foreach (var gameModFolder in Directory.GetDirectories(ProviderSettings.ModsLocation))
 		{
+			if (generation != _operationGeneration || _lifetimeCancellation.IsCancellationRequested)
+			{
+				return;
+			}
+
+			try
+			{
+				FsHelpers.EnsureNoReparsePoints(gameModFolder);
+			}
+			catch (Exception linkError) when (linkError is IOException or UnauthorizedAccessException)
+			{
+				continue;
+			}
 			var gameId = gameModFolder.GetFile();
+			if (!IsValidGameId(gameId))
+			{
+				continue;
+			}
+
 			if (_titles.TryGetValue(gameId, out var gameName))
 			{
 				_installedGames[gameId] = gameName;
 				GetInstalledMods(gameId);
 				_gamePickerButton.AddItem(PadLabel(gameName));
-				await GetAvailableMods(gameId, source);
+				_gamePickerButton.SetItemMetadata(_gamePickerButton.ItemCount - 1, gameId);
+				await GetAvailableMods(gameId, source, generation);
 			}
 			else
 			{
-				Tools.Instance.AddError($@"could not find associated game title for: {gameId}");
+				Tools.Instance?.AddError($@"could not find associated game title for: {gameId}");
 			}
 		}
 
@@ -168,18 +295,21 @@ public partial class ModManager : Control
 	{
 		if (string.IsNullOrWhiteSpace(ProviderSettings.ModsLocation))
 		{
-			Tools.Instance.AddError("Mods location is empty. Please choose a mods folder.");
+			Tools.Instance?.AddError("Mods location is empty. Please choose a mods folder.");
 			return false;
 		}
 
 		try
 		{
+			FsHelpers.RejectDangerousRoot(ProviderSettings.ModsLocation);
+			FsHelpers.EnsureNoReparsePoints(ProviderSettings.ModsLocation);
 			Directory.CreateDirectory(ProviderSettings.ModsLocation);
+			FsHelpers.EnsureNoReparsePoints(ProviderSettings.ModsLocation);
 			return true;
 		}
 		catch (Exception createDirectoryError)
 		{
-			Tools.Instance.AddError($@"Unable to create mods location: {createDirectoryError.Message}");
+			Tools.Instance?.AddError($@"Unable to create mods location: {createDirectoryError.Message}");
 			return false;
 		}
 	}
@@ -187,10 +317,14 @@ public partial class ModManager : Control
 
 	private async Task AddGameFromInput(string gameId)
 	{
+		if (_lifetimeCancellation.IsCancellationRequested)
+		{
+			return;
+		}
 		gameId = gameId.Trim().ToUpperInvariant();
 		if (!Regex.IsMatch(gameId, @"^[A-F0-9]{16}$"))
 		{
-			Tools.Instance.AddError("Game ID must be a 16-character hexadecimal Switch title ID.");
+			Tools.Instance?.AddError("Game ID must be a 16-character hexadecimal Switch title ID.");
 			return;
 		}
 
@@ -199,10 +333,13 @@ public partial class ModManager : Control
 			return;
 		}
 
-		Directory.CreateDirectory(Path.Join(ProviderSettings.ModsLocation, gameId));
+		var gameRoot = ModPaths.GameRoot(ProviderSettings.ModsLocation, gameId);
+		FsHelpers.EnsureNoReparsePoints(gameRoot);
+		Directory.CreateDirectory(gameRoot);
+		FsHelpers.EnsureNoReparsePoints(gameRoot);
 		if (!_titles.ContainsKey(gameId))
 		{
-			Tools.Instance.AddError($"Title ID {gameId} was added, but its name was not found. GameBanana matching may not work for this title.");
+			Tools.Instance?.AddError($"Title ID {gameId} was added, but its name was not found. GameBanana matching may not work for this title.");
 			_titles[gameId] = gameId;
 		}
 
@@ -211,37 +348,63 @@ public partial class ModManager : Control
 			_installedGames[gameId] = _titles[gameId];
 			GetInstalledMods(gameId);
 			_gamePickerButton.AddItem(PadLabel(_titles[gameId]));
+			_gamePickerButton.SetItemMetadata(_gamePickerButton.ItemCount - 1, gameId);
 		}
 
 		var gameIndex = GetGameButtonIndex(gameId);
 		if (gameIndex >= 0)
 		{
+			if (_lifetimeCancellation.IsCancellationRequested)
+			{
+				return;
+			}
 			_gamePickerButton.Selected = gameIndex;
 			_currentGameId = gameId;
 			_modList.Clear();
-			await GetAvailableMods(gameId, _selectedSource);
+			await GetAvailableMods(gameId, _selectedSource, _operationGeneration);
 			SelectGame(gameIndex);
 		}
 	}
 
 
-	private async Task GetAvailableMods(string gameId, Sources source)
+	private async Task GetAvailableMods(string gameId, Sources source, int expectedGeneration = -1)
 	{
 		if (gameId == null || !_installedGames.ContainsKey(gameId))
 		{
-			Tools.Instance.AddError("game ID invalid. Cancelling...");
+			Tools.Instance?.AddError("game ID invalid. Cancelling...");
 			_loadingPanel.Visible = false;
 			return;
 		}
 
 		try
 		{
-			var mods = await _bananaManager.GetAvailableMods(gameId, _installedGames, (int)Sources.Banana, _modsPage);
+			var page = _modsPageByGame.TryGetValue(gameId, out var loadedPage) ? loadedPage : 1;
+			var mods = await _bananaManager.GetAvailableMods(
+					gameId,
+					_installedGames,
+					(int)Sources.Banana,
+					page,
+					_lifetimeCancellation.Token);
+			if ((expectedGeneration >= 0 && expectedGeneration != _operationGeneration) ||
+				_lifetimeCancellation.IsCancellationRequested)
+			{
+				return;
+			}
 			AppendBrowseMods(gameId, mods);
+			_modsPageByGame[gameId] = page;
+			if (gameId == _currentGameId)
+			{
+				_modsPage = page;
+				_hasMorePages = !_exhaustedPages.Contains(gameId);
+			}
 		}
-		catch (ArgumentException argumentException)
+		catch (OperationCanceledException)
 		{
-			Tools.Instance.AddError(
+			throw;
+		}
+		catch (Exception argumentException)
+		{
+			Tools.Instance?.AddError(
 				$@"Failed to retrieve mod list for ID:{gameId} | Title:{_titles[gameId]}. Exception:{argumentException.Message}");
 			return;
 		}
@@ -257,7 +420,8 @@ public partial class ModManager : Control
 			_browseMods[gameId] = new List<Mod>();
 		}
 
-		_browseMods[gameId].AddRange(mods);
+		var existingKeys = new HashSet<string>(_browseMods[gameId].Select(ModKey));
+		_browseMods[gameId].AddRange(mods.Where(mod => existingKeys.Add(ModKey(mod))));
 	}
 
 
@@ -284,32 +448,64 @@ public partial class ModManager : Control
 	/// </summary>
 	private static string ModKey(Mod mod)
 	{
-		return !string.IsNullOrEmpty(mod.ModId)
-			? mod.ModId
-			: (mod.ModName ?? "").ToLower().Trim();
+		return ModPaths.StableId(mod);
 	}
 
 
-	private void GetInstalledMods(string gameId)
+	private bool GetInstalledMods(string gameId, bool persist = true)
 	{
+		var scanSucceeded = false;
 		try
 		{
-			_installedMods[gameId] = new List<Mod>();
-
-			if (File.Exists(_installedModsPath))
-			{
-				var installedModsJson =
-					JsonSerializer.Deserialize<Dictionary<string, List<Mod>>>(File.ReadAllText(_installedModsPath));
-				if (installedModsJson != null && installedModsJson.TryGetValue(gameId, out var gameMods))
+			var gameRoot = ModPaths.GameRoot(ProviderSettings.ModsLocation, gameId);
+				if (!IsValidGameId(gameId))
 				{
-					_installedMods[gameId] = gameMods;
-				}
+					return false;
+			}
+			Directory.CreateDirectory(gameRoot);
+			FsHelpers.EnsureNoReparsePoints(gameRoot);
+			RecoverInterruptedModOperations(gameId, gameRoot);
+			RecoverInterruptedModDeletes(gameId, gameRoot);
+			if (!_installedMods.TryGetValue(gameId, out var gameMods))
+			{
+				gameMods = new List<Mod>();
+				_installedMods[gameId] = gameMods;
 			}
 
-			foreach (var modDirectory in Directory.GetDirectories(Path.Join(ProviderSettings.ModsLocation, gameId)))
+			gameMods.RemoveAll(mod => mod == null || !TryValidateOrMigrateManagedMod(gameId, mod));
+			foreach (var modDirectory in Directory.GetDirectories(gameRoot))
 			{
-				if (ModPaths.IsManaged(modDirectory.GetFile()))
+				if (Path.GetFileName(modDirectory).StartsWith(".emustack-", StringComparison.Ordinal))
 				{
+					continue;
+				}
+				try
+				{
+					FsHelpers.EnsureNoReparseTree(modDirectory);
+				}
+				catch (Exception linkError) when (linkError is IOException or UnauthorizedAccessException)
+				{
+					Tools.Instance?.AddError($"Skipping linked mod directory: {modDirectory}");
+					continue;
+				}
+
+				if (ModPaths.IsManaged(modDirectory))
+				{
+					if (!gameMods.Any(mod => PathsEqual(mod.InstalledPath, modDirectory)))
+					{
+						var marker = File.ReadAllText(Path.Join(modDirectory, FsHelpers.OwnerMarkerFileName)).Trim();
+						var markerPrefix = $"{ModPaths.OwnerPrefix}{Globals.Instance.AppMode.Id}:{gameId}:";
+						if (marker.StartsWith(markerPrefix, StringComparison.Ordinal))
+						{
+							gameMods.Add(new Mod
+							{
+								StableId = marker[markerPrefix.Length..],
+								ModName = modDirectory.GetFile(),
+								CompatibleVersions = new List<string> { "NA" },
+								InstalledPath = modDirectory,
+							});
+						}
+					}
 					continue;
 				}
 
@@ -319,52 +515,449 @@ public partial class ModManager : Control
 					ModUrl = null,
 					CompatibleVersions = new List<string> { "NA" },
 					Source = -1,
+					StableId = $"local-{Guid.NewGuid():N}",
 					InstalledPath = modDirectory,
 				};
 
-				if (_installedMods[gameId].Any(mod => mod.InstalledPath == modToAdd.InstalledPath))
+				if (gameMods.Any(mod => PathsEqual(mod.InstalledPath, modToAdd.InstalledPath)))
 				{
 					continue;
 				}
 
-				_installedMods[gameId].Add(modToAdd);
+				gameMods.Add(modToAdd);
 			}
+			scanSucceeded = true;
 		}
 		catch (Exception installedError)
 		{
-			Tools.Instance.AddError($@"cannot find installed mods error: {installedError}");
-			_loadingPanel.Visible = false;
+			Tools.Instance?.AddError($@"cannot find installed mods error: {installedError}");
+			if (IsInstanceValid(_loadingPanel))
+			{
+				_loadingPanel.Visible = false;
+			}
 		}
 
-		SaveInstalledMods();
+		if (scanSucceeded && persist)
+		{
+			SaveInstalledMods();
+		}
+
+		return scanSucceeded;
 	}
+
+
+	private void RecoverInterruptedModOperations(string gameId, string gameRoot)
+	{
+		foreach (var operationRoot in Directory.GetDirectories(gameRoot, ".emustack-operation-*", SearchOption.TopDirectoryOnly))
+		{
+			try
+			{
+				FsHelpers.EnsureNoReparseTree(operationRoot);
+				var operationMarker = File.ReadAllText(Path.Join(operationRoot, FsHelpers.OwnerMarkerFileName)).Trim();
+				if (!operationMarker.StartsWith("operation:", StringComparison.Ordinal))
+				{
+					continue;
+				}
+
+				var installPath = File.ReadAllText(Path.Join(operationRoot, "install.path")).Trim();
+				var previousPath = File.ReadAllText(Path.Join(operationRoot, "previous.path")).Trim();
+				var ownerId = File.ReadAllText(Path.Join(operationRoot, "owner")).Trim();
+				var phase = File.ReadAllText(Path.Join(operationRoot, "phase")).Trim();
+				if (phase is not ("staging" or "swapping" or "filesystem-committed" or "state-committed" or "rollback"))
+				{
+					throw new InvalidDataException($"Unknown mod recovery phase: {phase}");
+				}
+				if (!FsHelpers.IsPathContainedBy(gameRoot, installPath) ||
+				    (!string.IsNullOrEmpty(previousPath) && !FsHelpers.IsPathContainedBy(gameRoot, previousPath)))
+				{
+					throw new InvalidDataException("Operation journal contains an out-of-root path.");
+				}
+				var expectedOwnerPrefix = $"{ModPaths.OwnerPrefix}{Globals.Instance.AppMode.Id}:{gameId}:";
+				if (!ownerId.StartsWith(expectedOwnerPrefix, StringComparison.Ordinal))
+				{
+					throw new InvalidDataException("Operation journal owner does not belong to the current provider and title.");
+				}
+				var modJournalPath = Path.Join(operationRoot, "mod.json");
+				FsHelpers.EnsureNoReparsePoints(modJournalPath);
+				var journalMod = JsonSerializer.Deserialize<Mod>(File.ReadAllText(modJournalPath));
+				if (journalMod == null || !string.Equals(ModPaths.OwnerId(Globals.Instance.AppMode.Id, gameId, journalMod), ownerId, StringComparison.Ordinal))
+				{
+					throw new InvalidDataException("Operation journal mod identity does not match its owner.");
+				}
+
+				var previous = Path.Join(operationRoot, "previous");
+				var stateCommitted = phase == "state-committed";
+				var commitConfirmed = stateCommitted && Directory.Exists(installPath);
+				if (commitConfirmed && !FsHelpers.IsOwnedDirectory(installPath, ownerId))
+				{
+					throw new IOException("Interrupted mod recovery found an unowned current directory.");
+				}
+				if (Directory.Exists(previous))
+				{
+					var previousOwner = File.ReadAllText(Path.Join(previous, FsHelpers.OwnerMarkerFileName)).Trim();
+					if (!string.Equals(previousOwner, ownerId, StringComparison.Ordinal))
+					{
+						throw new InvalidDataException("Operation journal previous ownership does not match the target mod.");
+					}
+					if (stateCommitted && Directory.Exists(installPath))
+					{
+						FsHelpers.DeleteOwnedDirectory(previous, operationRoot, previousOwner);
+					}
+					else
+					{
+						if (Directory.Exists(installPath) && !FsHelpers.IsOwnedDirectory(installPath, ownerId))
+						{
+							throw new IOException("Interrupted mod recovery found an unowned current directory.");
+							}
+							DeleteMarkerOwnedPathIfPresent(installPath, gameRoot, ownerId);
+							FsHelpers.EnsureNoReparsePoints(previousPath);
+							if (Directory.Exists(previousPath) || File.Exists(previousPath))
+							{
+								throw new IOException($"Cannot restore interrupted mod because the original path is occupied: {previousPath}");
+							}
+							Directory.Move(previous, previousPath);
+					}
+				}
+				else if (Directory.Exists(installPath) && phase == "filesystem-committed")
+				{
+					DeleteMarkerOwnedPathIfPresent(installPath, gameRoot, ownerId);
+				}
+
+				if (!commitConfirmed)
+				{
+					RestoreInterruptedModMetadata(
+						gameId,
+						previousPath,
+						operationRoot,
+						journalMod);
+				}
+
+				if (Directory.Exists(operationRoot))
+				{
+					FsHelpers.DeleteOwnedDirectory(operationRoot, gameRoot, operationMarker);
+				}
+			}
+			catch (Exception recoveryError)
+			{
+				Tools.Instance?.AddError($"Could not recover an interrupted mod operation for '{gameId}': {recoveryError.Message}");
+			}
+		}
+	}
+
+
+	private void RecoverInterruptedModDeletes(string gameId, string gameRoot)
+	{
+		foreach (var operationRoot in Directory.GetDirectories(gameRoot, ".emustack-delete-*", SearchOption.TopDirectoryOnly))
+		{
+			try
+			{
+				FsHelpers.EnsureNoReparseTree(operationRoot);
+				var operationMarkerPath = Path.Join(operationRoot, FsHelpers.OwnerMarkerFileName);
+				if (!File.Exists(operationMarkerPath))
+				{
+					continue;
+				}
+
+				var operationMarker = File.ReadAllText(operationMarkerPath).Trim();
+				if (!operationMarker.StartsWith("operation:", StringComparison.Ordinal) ||
+					!FsHelpers.IsOwnedDirectory(operationRoot, operationMarker))
+				{
+					continue;
+				}
+
+				var installPath = File.ReadAllText(Path.Join(operationRoot, "install.path")).Trim();
+				var ownerId = File.ReadAllText(Path.Join(operationRoot, "owner")).Trim();
+				var modJournalPath = Path.Join(operationRoot, "mod.json");
+				var phase = File.ReadAllText(Path.Join(operationRoot, "phase")).Trim();
+				if (phase is not ("staging" or "filesystem-committed" or "state-committed" or "rollback"))
+				{
+					throw new InvalidDataException($"Unknown mod deletion recovery phase: {phase}");
+				}
+				if (!FsHelpers.IsPathContainedBy(gameRoot, installPath))
+				{
+					throw new InvalidDataException("Delete journal contains an out-of-root path.");
+				}
+				var expectedOwnerPrefix = $"{ModPaths.OwnerPrefix}{Globals.Instance.AppMode.Id}:{gameId}:";
+				if (!ownerId.StartsWith(expectedOwnerPrefix, StringComparison.Ordinal))
+				{
+					throw new InvalidDataException("Delete journal owner does not belong to the current provider and title.");
+				}
+
+				var quarantine = Path.Join(operationRoot, "quarantine");
+				if (phase == "state-committed")
+				{
+					if (Directory.Exists(quarantine))
+					{
+						try
+						{
+							FsHelpers.DeleteOwnedDirectory(quarantine, operationRoot, ownerId);
+						}
+						catch
+						{
+							RestoreInterruptedDelete(gameId, installPath, quarantine, ownerId, modJournalPath);
+						}
+					}
+				}
+				else if (Directory.Exists(quarantine))
+				{
+					if (!FsHelpers.IsOwnedDirectory(quarantine, ownerId))
+					{
+						throw new IOException("Delete journal quarantine ownership does not match the target mod.");
+					}
+					if (Directory.Exists(installPath))
+					{
+						throw new IOException($"Cannot restore deleted mod because the original path is occupied: {installPath}");
+					}
+					Directory.Move(quarantine, installPath);
+					RestoreInterruptedDeleteMetadata(gameId, installPath, ownerId, modJournalPath);
+				}
+
+				FsHelpers.DeleteOwnedDirectory(operationRoot, gameRoot, operationMarker);
+			}
+			catch (Exception recoveryError)
+			{
+				Tools.Instance?.AddError($"Could not recover an interrupted mod deletion for '{gameId}': {recoveryError.Message}");
+			}
+		}
+	}
+
+
+	private void RestoreInterruptedModMetadata(string gameId, string previousPath, string operationRoot, Mod journalMod)
+	{
+		var stableId = ModPaths.StableId(journalMod);
+		if (!string.IsNullOrEmpty(previousPath))
+		{
+			Mod restoredMod;
+			var previousMetadataPath = Path.Join(operationRoot, "previous.mod.json");
+			if (File.Exists(previousMetadataPath))
+			{
+				FsHelpers.EnsureNoReparsePoints(previousMetadataPath);
+				restoredMod = JsonSerializer.Deserialize<Mod>(File.ReadAllText(previousMetadataPath));
+				if (restoredMod == null || ModPaths.StableId(restoredMod) != stableId)
+				{
+					throw new InvalidDataException("Previous mod metadata does not match the operation owner.");
+				}
+			}
+			else
+			{
+				restoredMod = _installedMods.TryGetValue(gameId, out var currentMods)
+					? currentMods.FirstOrDefault(mod => ModPaths.StableId(mod) == stableId)
+					: null;
+				restoredMod ??= journalMod;
+			}
+
+			restoredMod.InstalledPath = previousPath;
+			StandardModManagement.RecordInstalledMod(gameId, restoredMod, _installedMods, _browseMods);
+		}
+		else if (_installedMods.TryGetValue(gameId, out var installedMods))
+		{
+			installedMods.RemoveAll(mod => mod != null && ModPaths.StableId(mod) == stableId);
+		}
+
+		if (!SaveInstalledMods())
+		{
+			throw new IOException("Failed to persist recovered mod metadata.");
+		}
+	}
+
+
+	private void RestoreInterruptedDelete(string gameId, string installPath, string quarantine, string ownerId, string modJournalPath)
+	{
+		if (!FsHelpers.IsOwnedDirectory(quarantine, ownerId))
+		{
+			throw new IOException("Delete journal quarantine ownership does not match the target mod.");
+		}
+		if (Directory.Exists(installPath))
+		{
+			throw new IOException($"Cannot restore the deleted mod because the original path is occupied: {installPath}");
+		}
+		Directory.Move(quarantine, installPath);
+		if (!FsHelpers.IsOwnedDirectory(installPath, ownerId))
+		{
+			throw new IOException("Restored mod ownership marker did not match the delete journal.");
+		}
+		RestoreInterruptedDeleteMetadata(gameId, installPath, ownerId, modJournalPath);
+	}
+
+
+	private void RestoreInterruptedDeleteMetadata(string gameId, string installPath, string ownerId, string modJournalPath)
+	{
+		if (!File.Exists(modJournalPath))
+		{
+			throw new InvalidDataException("Delete journal is missing the mod metadata needed for rollback.");
+		}
+
+		var restoredMod = JsonSerializer.Deserialize<Mod>(File.ReadAllText(modJournalPath));
+		if (restoredMod == null)
+		{
+			throw new InvalidDataException("Delete journal contains invalid mod metadata.");
+		}
+		if (!string.Equals(
+			ModPaths.OwnerId(Globals.Instance.AppMode.Id, gameId, restoredMod),
+			ownerId,
+			StringComparison.Ordinal))
+		{
+			throw new InvalidDataException("Delete journal mod identity does not match its owner.");
+		}
+		restoredMod.InstalledPath = installPath;
+		if (!FsHelpers.IsOwnedDirectory(installPath, ownerId))
+		{
+			throw new IOException("Restored mod ownership marker did not match the delete journal.");
+		}
+		StandardModManagement.RecordInstalledMod(gameId, restoredMod, _installedMods, _browseMods);
+		RemoveModFromInactiveSource(gameId, restoredMod);
+		if (!SaveInstalledMods())
+		{
+			throw new IOException("Failed to persist the restored mod metadata.");
+		}
+	}
+
+
+	private static void DeleteMarkerOwnedPathIfPresent(string path, string parentRoot, string expectedOwner)
+	{
+		if (!Directory.Exists(path))
+		{
+			return;
+		}
+		var marker = Path.Join(path, FsHelpers.OwnerMarkerFileName);
+		if (!File.Exists(marker))
+		{
+			throw new InvalidOperationException($"Recovery refused to delete an unowned directory: {path}");
+		}
+		var actualOwner = File.ReadAllText(marker).Trim();
+		if (!string.Equals(actualOwner, expectedOwner, StringComparison.Ordinal))
+		{
+			throw new InvalidOperationException($"Recovery refused to delete a directory with unexpected ownership: {path}");
+		}
+		FsHelpers.DeleteOwnedDirectory(path, parentRoot, actualOwner);
+	}
+
+
+	private bool TryValidateOrMigrateManagedMod(string gameId, Mod mod)
+	{
+		var gameRoot = ModPaths.GameRoot(ProviderSettings.ModsLocation, gameId);
+		if (string.IsNullOrWhiteSpace(mod.InstalledPath) || !Directory.Exists(mod.InstalledPath) ||
+		    !FsHelpers.IsPathContainedBy(gameRoot, mod.InstalledPath))
+		{
+			return false;
+		}
+		try
+		{
+			FsHelpers.EnsureNoReparseTree(mod.InstalledPath);
+		}
+		catch (IOException)
+		{
+			return false;
+		}
+		catch (UnauthorizedAccessException)
+		{
+			return false;
+		}
+
+		ModPaths.StableId(mod);
+		var ownerId = ModPaths.OwnerId(Globals.Instance.AppMode.Id, gameId, mod);
+		if (FsHelpers.IsOwnedDirectory(mod.InstalledPath, ownerId))
+		{
+			return true;
+		}
+
+		// Adopt only legacy online-managed folders that came from a contained index.
+		// Local/unmanaged folders remain read-only and never receive an ownership marker.
+		var legacyPath = Path.Join(gameRoot, $"Managed{ModPaths.Sanitize(mod.ModName)}");
+		var currentPath = ModPaths.ManagedFolder(ProviderSettings.ModsLocation, gameId, mod);
+		if (mod.ModUrl != null &&
+			(PathsEqual(mod.InstalledPath, legacyPath) || PathsEqual(mod.InstalledPath, currentPath)) &&
+			Path.GetFileName(mod.InstalledPath).StartsWith("Managed", StringComparison.Ordinal))
+		{
+			FsHelpers.MarkOwnedDirectory(mod.InstalledPath, ownerId);
+			return true;
+		}
+
+		return !Path.GetFileName(mod.InstalledPath).StartsWith("Managed", StringComparison.Ordinal);
+	}
+
+
+	private static bool PathsEqual(string left, string right)
+	{
+		if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+		{
+			return false;
+		}
+		try
+		{
+			return string.Equals(FsHelpers.CanonicalPath(left), FsHelpers.CanonicalPath(right),
+				OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+		}
+		catch (ArgumentException)
+		{
+			return false;
+		}
+	}
+
+
+	private static bool IsValidGameId(string gameId) =>
+		!string.IsNullOrWhiteSpace(gameId) && Regex.IsMatch(gameId, "^[A-Fa-f0-9]{16}$");
 
 
 	private async void LoadNextPage()
 	{
-		if (_isSearchMode || string.IsNullOrEmpty(_currentGameId))
+		if (_isSearchMode || string.IsNullOrEmpty(_currentGameId) || !_hasMorePages || !BeginOperation())
 		{
 			return;
 		}
 
-		_modsPage++;
-		_loadingPanel.Visible = true;
-		DisableInteraction();
-
-		var oldModCount = _browseMods.TryGetValue(_currentGameId, out var oldMods) ? oldMods.Count : 0;
-
-		var mods = await _bananaManager.GetAvailableMods(_currentGameId, _installedGames, (int)Sources.Banana, _modsPage);
-		AppendBrowseMods(_currentGameId, mods);
-
-		var noNewMods = !_browseMods.TryGetValue(_currentGameId, out var browseList) || browseList.Count <= oldModCount;
-		_loadMoreButton.Disabled = noNewMods;
-
-		RemoveInstalledFromBrowse(_currentGameId);
-
-		DisableInteraction(false);
-		_loadingPanel.Visible = false;
-
-		SelectGame(_gamePickerButton.Selected);
+		try
+		{
+			var gameId = _currentGameId;
+			var currentPage = _modsPageByGame.TryGetValue(gameId, out var loadedPage) ? loadedPage : 1;
+			var nextPage = currentPage + 1;
+			_loadingPanel.Visible = true;
+			DisableInteraction();
+			var generation = _operationGeneration;
+			RemoveInstalledFromBrowse(gameId);
+			var oldModCount = _browseMods.TryGetValue(gameId, out var oldMods) ? oldMods.Count : 0;
+			var mods = await _bananaManager.GetAvailableMods(
+				gameId, _installedGames, (int)Sources.Banana, nextPage, _lifetimeCancellation.Token);
+			if (generation != _operationGeneration || gameId != _currentGameId)
+			{
+				return;
+			}
+			_modsPage = nextPage;
+			_modsPageByGame[gameId] = nextPage;
+			AppendBrowseMods(gameId, mods);
+			RemoveInstalledFromBrowse(gameId);
+			var noNewMods = !_browseMods.TryGetValue(gameId, out var browseList) || browseList.Count <= oldModCount;
+			if (noNewMods)
+			{
+				_exhaustedPages.Add(gameId);
+			}
+			else
+			{
+				_exhaustedPages.Remove(gameId);
+			}
+			_hasMorePages = !noNewMods;
+			if (!_lifetimeCancellation.IsCancellationRequested && IsInstanceValid(_gamePickerButton))
+			{
+				SelectGame(_gamePickerButton.Selected);
+			}
+			_loadMoreButton.Disabled = noNewMods;
+		}
+		catch (OperationCanceledException)
+		{
+			return;
+		}
+		catch (Exception pageError)
+		{
+			Tools.Instance?.AddError($"Failed to load more mods for '{_currentGameId}': {pageError.Message}");
+		}
+		finally
+		{
+			if (IsInstanceValid(_loadingPanel))
+			{
+				_loadingPanel.Visible = false;
+			}
+			EndOperation();
+		}
 	}
 
 
@@ -380,9 +973,10 @@ public partial class ModManager : Control
 		{
 			foreach (var mod in installedMods)
 			{
-				var modIndex = _modList.AddItem($@"  {mod.ModName} || Supports:{string.Join(", ", mod.CompatibleVersions)}  ",
+				var compatibleVersions = mod.CompatibleVersions ?? new List<string> { "NA" };
+				var modIndex = _modList.AddItem($@"  {mod.ModName} || Supports:{string.Join(", ", compatibleVersions)}  ",
 					icon: _installedIcon);
-				_modList.SetItemMetadata(modIndex, mod.ModName);
+				_modList.SetItemMetadata(modIndex, ModKey(mod));
 			}
 		}
 
@@ -390,8 +984,9 @@ public partial class ModManager : Control
 		{
 			foreach (var mod in sourceMods)
 			{
-				var modIndex = _modList.AddItem($@"  {mod.ModName} || Supports:{string.Join(", ", mod.CompatibleVersions)}  ");
-				_modList.SetItemMetadata(modIndex, mod.ModName);
+				var compatibleVersions = mod.CompatibleVersions ?? new List<string> { "NA" };
+				var modIndex = _modList.AddItem($@"  {mod.ModName} || Supports:{string.Join(", ", compatibleVersions)}  ");
+				_modList.SetItemMetadata(modIndex, ModKey(mod));
 			}
 		}
 
@@ -401,13 +996,21 @@ public partial class ModManager : Control
 
 	private void GetTitles(long result, long responseCode, string[] headers, byte[] body)
 	{
+		if (_titleRequestGeneration != _operationGeneration || _lifetimeCancellation.IsCancellationRequested ||
+			!IsInstanceValid(this))
+		{
+			return;
+		}
 		// Fall back to the built-in list whether or not the network request succeeded.
 		AddBuiltInTitles();
 
 		if (result != (int)HttpRequest.Result.Success || responseCode is < 200 or >= 400)
 		{
-			Tools.Instance.AddError($@"cannot retrieve titles, result: {result}, HTTP status: {responseCode}");
-			_loadingPanel.Visible = false;
+			Tools.Instance?.AddError($@"cannot retrieve titles, result: {result}, HTTP status: {responseCode}");
+			if (IsInstanceValid(_loadingPanel))
+			{
+				_loadingPanel.Visible = false;
+			}
 			return;
 		}
 
@@ -416,7 +1019,7 @@ public partial class ModManager : Control
 
 		if (gameList.Count < 2)
 		{
-			Tools.Instance.AddError("cannot retrieve titles");
+			Tools.Instance?.AddError("cannot retrieve titles");
 			return;
 		}
 
@@ -429,11 +1032,9 @@ public partial class ModManager : Control
 			var gameCleaned = StripWikiHtml(game);
 			var gameSplit = gameCleaned.Split("\n");
 
-			if (gameSplit.Length < 2)
+			if (gameSplit.Length < 3)
 			{
-				Tools.Instance.AddError("unable to parse titles list, check connection and try again later.");
-				_loadingPanel.Visible = false;
-				return;
+				continue;
 			}
 
 			var gameId = gameSplit[1].Trim();
@@ -471,29 +1072,49 @@ public partial class ModManager : Control
 
 	private async void UpdateAll()
 	{
-		if (!await Tools.Instance.ConfirmationPopup("Update all mods?"))
+		if (!BeginOperation())
 		{
 			return;
 		}
-
-		foreach (var installedGame in _installedGames)
+		try
 		{
-			foreach (var mod in new List<Mod>(_installedMods[installedGame.Key]))
+			if (!await Tools.Instance.ConfirmationPopup("Update all mods?"))
 			{
-				if (mod.ModUrl != null)
+				return;
+			}
+
+			foreach (var installedGame in _installedGames)
+			{
+				foreach (var mod in new List<Mod>(_installedMods[installedGame.Key]))
 				{
-					var modUpdated = await UpdateMod(installedGame.Key, mod, true);
-					if (modUpdated != true)
+					if (mod.ModUrl != null && !await UpdateMod(installedGame.Key, mod, true))
 					{
-						Tools.Instance.AddError($@"failed to update:{mod.ModName}");
-						_loadingPanel.Visible = false;
+						Tools.Instance?.AddError($@"failed to update:{mod.ModName}");
 						return;
 					}
 				}
 			}
+			if (!_lifetimeCancellation.IsCancellationRequested && IsInstanceValid(_gamePickerButton))
+			{
+				SelectGame(_gamePickerButton.Selected);
+			}
 		}
-
-		SelectGame(_gamePickerButton.Selected);
+		catch (OperationCanceledException)
+		{
+			return;
+		}
+		catch (Exception updateAllError)
+		{
+			Tools.Instance?.AddError($"Update all mods failed: {updateAllError.Message}");
+		}
+		finally
+		{
+			if (IsInstanceValid(_loadingPanel))
+			{
+				_loadingPanel.Visible = false;
+			}
+			EndOperation();
+		}
 	}
 
 
@@ -504,36 +1125,30 @@ public partial class ModManager : Control
 			return false;
 		}
 
-		try
+		var successful = await _standardModManager.UpdateMod(
+			gameId, mod, _installedMods, ActiveSourceMods, SaveInstalledMods, _lifetimeCancellation.Token);
+		if (successful)
 		{
-			var removedMod = await DeleteMod(gameId, mod, true);
-			if (!removedMod)
-			{
-				Tools.Instance.AddError($@"failed to update mod, unable to delete old... Returning.");
-				return false;
-			}
-
-			await InstallMod(gameId, mod);
+			RemoveModFromInactiveSource(gameId, mod);
 		}
-		catch (Exception updateError)
-		{
-			Tools.Instance.AddError($@"failed to update mod:{updateError}");
-			return false;
-		}
-
-		SelectGame(_gamePickerButton.Selected);
-		return true;
+		return successful;
 	}
 
 
-	private async void SelectGame(int gameIndex)
+	private void SelectGame(int gameIndex)
 	{
 		if (gameIndex < 0 || gameIndex >= _gamePickerButton.ItemCount)
 		{
 			return;
 		}
 
-		_currentGameId = GetGameIdFromValue(_gamePickerButton.GetItemText(gameIndex).Trim(), _installedGames);
+		_currentGameId = _gamePickerButton.GetItemMetadata(gameIndex).AsString();
+		_modsPage = _modsPageByGame.TryGetValue(_currentGameId, out var loadedPage) ? loadedPage : 1;
+		_hasMorePages = !_exhaustedPages.Contains(_currentGameId);
+		if (!_operationInProgress)
+		{
+			_loadMoreButton.Disabled = _isSearchMode || !_hasMorePages;
+		}
 		_modList.Clear();
 
 		_sourcePickerButton.Clear();
@@ -543,23 +1158,15 @@ public partial class ModManager : Control
 	}
 
 
-	private static string GetGameIdFromValue(string value, Dictionary<string, string> installedGames)
-	{
-		foreach (var (gameId, gameName) in installedGames)
-		{
-			if (gameName == value)
-			{
-				return gameId;
-			}
-		}
-
-		return null;
-	}
-
-
 	private async Task Refresh(Sources source = Sources.Banana)
 	{
 		ExitSearchMode();
+		_modsPage = 1;
+		_modsPageByGame.Clear();
+		_exhaustedPages.Clear();
+		_hasMorePages = true;
+		_operationGeneration++;
+		_currentGameId = null;
 
 		_modList.Clear();
 		_browseMods.Clear();
@@ -598,7 +1205,33 @@ public partial class ModManager : Control
 		_refreshButton.Disabled = interactionDisabled;
 		_updateAllButton.Disabled = interactionDisabled;
 		_updateSelectedButton.Disabled = interactionDisabled;
-		_loadMoreButton.Disabled = interactionDisabled;
+		_loadMoreButton.Disabled = interactionDisabled || _isSearchMode || !_hasMorePages || string.IsNullOrEmpty(_currentGameId);
+		_addGameButton.Disabled = interactionDisabled;
+		_manualGameIdLineEdit.Editable = !interactionDisabled;
+		_searchBar.Editable = !interactionDisabled;
+	}
+
+
+	private bool BeginOperation()
+	{
+		if (_operationInProgress || _lifetimeCancellation.IsCancellationRequested)
+		{
+			return false;
+		}
+		_operationInProgress = true;
+		_operationGeneration++;
+		DisableInteraction();
+		return true;
+	}
+
+
+	private void EndOperation()
+	{
+		_operationInProgress = false;
+		if (IsInstanceValid(this))
+		{
+			DisableInteraction(false);
+		}
 	}
 
 
@@ -607,14 +1240,13 @@ public partial class ModManager : Control
 		var sourceId = _sourcePickerButton.GetItemId(sourceIndex);
 		if (!Enum.IsDefined(typeof(Sources), sourceId))
 		{
-			Tools.Instance.AddError("source not found, please file a bug report. Defaulting back to GameBanana");
+			Tools.Instance?.AddError("source not found, please file a bug report. Defaulting back to GameBanana");
 			_selectedSource = Sources.Banana;
 			_sourcePickerButton.Select(GetSourceButtonIndex(_selectedSource));
 			return;
 		}
 
 		_selectedSource = (Sources)sourceId;
-		_loadMoreButton.Disabled = false;
 
 		await Refresh(_selectedSource);
 	}
@@ -638,7 +1270,7 @@ public partial class ModManager : Control
 	{
 		for (var itemIndex = 0; itemIndex < _gamePickerButton.ItemCount; itemIndex++)
 		{
-			if (GetGameIdFromValue(_gamePickerButton.GetItemText(itemIndex).Trim(), _installedGames) == gameId)
+			if (_gamePickerButton.GetItemMetadata(itemIndex).AsString() == gameId)
 			{
 				return itemIndex;
 			}
@@ -648,7 +1280,7 @@ public partial class ModManager : Control
 	}
 
 
-	private async void ClearMods(string gameId = "")
+	private async Task ClearMods(string gameId = "")
 	{
 		gameId = string.IsNullOrEmpty(gameId) ? _currentGameId : gameId;
 		if (!_installedMods.ContainsKey(gameId))
@@ -663,50 +1295,139 @@ public partial class ModManager : Control
 			// the directory was already gone.
 			foreach (var mod in new List<Mod>(_installedMods[gameId]))
 			{
-				await DeleteMod(gameId, mod, true);
-				_installedMods[gameId].Remove(mod);
+				if (FsHelpers.IsOwnedDirectory(mod.InstalledPath, ModPaths.OwnerId(Globals.Instance.AppMode.Id, gameId, mod)))
+				{
+					await DeleteMod(gameId, mod, true);
+				}
 			}
 		}
 		catch (Exception deleteError)
 		{
-			Tools.Instance.AddError($@"failed to delete mod:{deleteError}");
+			Tools.Instance?.AddError($@"failed to delete mod:{deleteError}");
 		}
 
-		SelectGame(_gamePickerButton.Selected);
-	}
-
-
-	private void SaveInstalledMods()
-	{
-		var saveDirectory = Path.GetDirectoryName(_installedModsPath);
-		if (!string.IsNullOrEmpty(saveDirectory))
+		if (!_lifetimeCancellation.IsCancellationRequested && IsInstanceValid(_gamePickerButton))
 		{
-			Directory.CreateDirectory(saveDirectory);
+			SelectGame(_gamePickerButton.Selected);
 		}
-
-		var serializedMods = JsonSerializer.Serialize(_installedMods);
-		File.WriteAllText(_installedModsPath, serializedMods);
 	}
 
 
-	private async Task InstallMod(string gameId, Mod mod)
+	private void LoadInstalledIndex()
 	{
-		if (await _standardModManager.InstallMod(gameId, mod, _installedMods, ActiveSourceMods))
+		var loadPath = File.Exists(_installedModsPath)
+			? _installedModsPath
+			: File.Exists(_legacyInstalledModsPath) ? _legacyInstalledModsPath : null;
+		if (loadPath == null)
+		{
+			_installedMods = new Dictionary<string, List<Mod>>();
+			return;
+		}
+
+		try
+		{
+			FsHelpers.EnsureNoReparsePoints(loadPath);
+			_installedMods = JsonSerializer.Deserialize<Dictionary<string, List<Mod>>>(File.ReadAllText(loadPath))
+			                 ?? new Dictionary<string, List<Mod>>();
+			FilterIndexToCurrentProvider();
+		}
+		catch (Exception indexError)
+		{
+			var corruptPath = loadPath + $".corrupt-{DateTime.UtcNow:yyyyMMddHHmmss}";
+			try
+			{
+				FsHelpers.EnsureNoReparsePoints(loadPath);
+				FsHelpers.EnsureNoReparsePoints(corruptPath);
+				File.Copy(loadPath, corruptPath, true);
+			}
+			catch (Exception quarantineError)
+			{
+				Tools.Instance?.AddError($"Could not quarantine the corrupt mod index safely: {quarantineError.Message}");
+			}
+			var backupPath = loadPath + ".bak";
+			if (File.Exists(backupPath))
+			{
+				try
+				{
+					FsHelpers.EnsureNoReparsePoints(backupPath);
+					_installedMods = JsonSerializer.Deserialize<Dictionary<string, List<Mod>>>(File.ReadAllText(backupPath))
+					                 ?? new Dictionary<string, List<Mod>>();
+					FilterIndexToCurrentProvider();
+					Tools.Instance?.AddError($"Recovered the {Globals.Instance.AppMode.Name} mod index from backup; corrupt data was quarantined.");
+					return;
+				}
+				catch (Exception)
+				{
+					// Preserve both files and rebuild only from owned folder markers below.
+				}
+			}
+
+			_installedMods = new Dictionary<string, List<Mod>>();
+			Tools.Instance?.AddError($"Could not read the {Globals.Instance.AppMode.Name} mod index; corrupt data was quarantined: {indexError.Message}");
+		}
+	}
+
+
+	private void FilterIndexToCurrentProvider()
+	{
+		foreach (var (gameId, mods) in _installedMods.ToList())
+		{
+			if (!IsValidGameId(gameId))
+			{
+				_installedMods.Remove(gameId);
+				continue;
+			}
+
+			var gameRoot = ModPaths.GameRoot(ProviderSettings.ModsLocation, gameId);
+			mods?.RemoveAll(mod => mod == null || string.IsNullOrWhiteSpace(mod.InstalledPath) ||
+				!FsHelpers.IsPathContainedBy(gameRoot, mod.InstalledPath));
+			if (mods == null)
+			{
+				_installedMods.Remove(gameId);
+			}
+		}
+	}
+
+
+	private bool SaveInstalledMods()
+	{
+		if (!_initialized || string.IsNullOrWhiteSpace(_installedModsPath) || _installedModsPath.Contains("://", StringComparison.Ordinal))
+		{
+			return false;
+		}
+
+		try
+		{
+			var serializedMods = JsonSerializer.Serialize(_installedMods);
+			FsHelpers.AtomicWriteText(_installedModsPath, serializedMods);
+			return true;
+		}
+		catch (Exception saveError)
+		{
+			Tools.Instance?.AddError($"Failed to save the {Globals.Instance.AppMode.Name} mod index: {saveError.Message}");
+			return false;
+		}
+	}
+
+
+	private async Task<bool> InstallMod(string gameId, Mod mod)
+	{
+		var successful = await _standardModManager.InstallMod(
+			gameId, mod, _installedMods, ActiveSourceMods, SaveInstalledMods, _lifetimeCancellation.Token);
+		if (successful)
 		{
 			_downloadBar.Value = 100;
+			RemoveModFromInactiveSource(gameId, mod);
 		}
-
-		// Keep the inactive source dictionary consistent so switching between
-		// browse and search views doesn't show stale entries.
-		RemoveModFromInactiveSource(gameId, mod);
-
-		SaveInstalledMods();
+		return successful;
 	}
 
 
 	private async Task<bool> DeleteMod(string gameId, Mod mod, bool noConfirmation = false)
 	{
-		var successful = await _standardModManager.DeleteMod(gameId, mod, _installedMods, ActiveSourceMods, noConfirmation);
+		var successful = await _standardModManager.DeleteMod(
+			gameId, mod, _installedMods, ActiveSourceMods, SaveInstalledMods, noConfirmation,
+			_lifetimeCancellation.Token);
 
 		// Re-add the mod to the browse list so it reappears when not searching.
 		if (successful && mod.ModUrl != null)
@@ -723,7 +1444,6 @@ public partial class ModManager : Control
 			}
 		}
 
-		SaveInstalledMods();
 		return successful;
 	}
 
@@ -740,6 +1460,10 @@ public partial class ModManager : Control
 
 	private async void SearchUpdated(string newSearch)
 	{
+		if (_lifetimeCancellation.IsCancellationRequested)
+		{
+			return;
+		}
 		var query = newSearch.Trim();
 		var token = ++_searchToken;
 
@@ -748,12 +1472,28 @@ public partial class ModManager : Control
 		await ToSignal(GetTree().CreateTimer(SearchDebounceSeconds), "timeout");
 
 		// A newer keystroke arrived while we were waiting — discard this search.
-		if (token != _searchToken)
+		if (token != _searchToken || _lifetimeCancellation.IsCancellationRequested)
 		{
 			return;
 		}
 
-		await PerformSearch(query);
+		try
+		{
+			await PerformSearch(query);
+		}
+		catch (OperationCanceledException)
+		{
+			// Superseded by scene shutdown.
+		}
+		catch (Exception searchError)
+		{
+			if (_lifetimeCancellation.IsCancellationRequested || !IsInstanceValid(_loadingPanel))
+			{
+				return;
+			}
+			_loadingPanel.Visible = false;
+			Tools.Instance?.AddError($"Search failed: {searchError.Message}");
+		}
 	}
 
 
@@ -775,21 +1515,36 @@ public partial class ModManager : Control
 		}
 
 		_isSearchMode = true;
+		var token = _searchToken;
+		var generation = _operationGeneration;
 		_searchMods.Clear();
 		_loadMoreButton.Disabled = true;
 		_loadingPanel.Visible = true;
 
 		try
 		{
-			var results = await _bananaManager.SearchMods(gameId, _installedGames, (int)Sources.Banana, query);
+			var results = await _bananaManager.SearchMods(
+				gameId, _installedGames, (int)Sources.Banana, query, _lifetimeCancellation.Token);
+			if (token != _searchToken || generation != _operationGeneration || gameId != _currentGameId)
+			{
+				return;
+			}
 			_searchMods[gameId] = FilterInstalled(gameId, results);
 		}
-		catch (ArgumentException ex)
+		catch (Exception ex)
 		{
-			Tools.Instance.AddError($"Search failed: {ex.Message}");
+			if (token != _searchToken || generation != _operationGeneration)
+			{
+				return;
+			}
+			Tools.Instance?.AddError($"Search failed: {ex.Message}");
 			_searchMods[gameId] = new List<Mod>();
 		}
 
+		if (token != _searchToken || generation != _operationGeneration || gameId != _currentGameId)
+		{
+			return;
+		}
 		_loadingPanel.Visible = false;
 		_modList.Clear();
 		AddMods(gameId);
@@ -817,80 +1572,121 @@ public partial class ModManager : Control
 		{
 			_searchBar.Text = "";
 		}
-		_loadMoreButton.Disabled = false;
+		_hasMorePages = string.IsNullOrEmpty(_currentGameId) || !_exhaustedPages.Contains(_currentGameId);
+		_loadMoreButton.Disabled = _operationInProgress || string.IsNullOrEmpty(_currentGameId) || !_hasMorePages;
 	}
 
 
 	private async void ModClicked(int modIndex)
 	{
-		if (_installedMods.TryGetValue(_currentGameId, out var installedMods))
+		if (!BeginOperation())
 		{
-			foreach (var mod in installedMods)
+			return;
+		}
+		try
+		{
+			var selectedKey = _modList.GetItemMetadata(modIndex).AsString();
+			if (_installedMods.TryGetValue(_currentGameId, out var installedMods))
 			{
-				if ((string)_modList.GetItemMetadata(modIndex) == mod.ModName)
+				foreach (var mod in installedMods)
 				{
-					DisableInteraction();
-					await DeleteMod(_currentGameId, mod);
-					DisableInteraction(false);
-					SelectGame(_gamePickerButton.Selected);
-					return;
+					if (selectedKey == ModKey(mod))
+					{
+						if (!FsHelpers.IsOwnedDirectory(mod.InstalledPath,
+							ModPaths.OwnerId(Globals.Instance.AppMode.Id, _currentGameId, mod)))
+						{
+							Tools.Instance?.AddError($"'{mod.ModName}' is unmanaged and read-only. EmuStack will not delete its folder.");
+							return;
+						}
+						await DeleteMod(_currentGameId, mod);
+						if (!_lifetimeCancellation.IsCancellationRequested && IsInstanceValid(_gamePickerButton))
+						{
+							SelectGame(_gamePickerButton.Selected);
+						}
+						return;
+					}
+				}
+			}
+
+			if (ActiveSourceMods.TryGetValue(_currentGameId, out var selectedSourceMods))
+			{
+				foreach (var mod in selectedSourceMods)
+				{
+					if (selectedKey == ModKey(mod))
+					{
+						await InstallMod(_currentGameId, mod);
+						if (!_lifetimeCancellation.IsCancellationRequested && IsInstanceValid(_gamePickerButton))
+						{
+							SelectGame(_gamePickerButton.Selected);
+						}
+						return;
+					}
 				}
 			}
 		}
-
-		if (ActiveSourceMods.TryGetValue(_currentGameId, out var selectedSourceMods))
+		catch (Exception modActionError)
 		{
-			foreach (var mod in selectedSourceMods)
-			{
-				if ((string)_modList.GetItemMetadata(modIndex) == mod.ModName)
-				{
-					DisableInteraction();
-					await InstallMod(_currentGameId, mod);
-					DisableInteraction(false);
-					SelectGame(_gamePickerButton.Selected);
-					return;
-				}
-			}
+			Tools.Instance?.AddError($"Mod action failed: {modActionError.Message}");
+		}
+		finally
+		{
+			EndOperation();
 		}
 	}
 
 
 	private async void UpdateSelectedPressed()
 	{
-		if (!_installedMods.TryGetValue(_currentGameId, out var installedMods))
+		if (!BeginOperation())
 		{
 			return;
 		}
-
-		var selectedMods = _modList.GetSelectedItems();
-		if (selectedMods.Length <= 0)
+		try
 		{
-			return;
-		}
-
-		var selectedModName = (string)_modList.GetItemMetadata(selectedMods.First());
-
-		foreach (var mod in installedMods)
-		{
-			if (selectedModName == mod.ModName)
+			if (!_installedMods.TryGetValue(_currentGameId, out var installedMods))
 			{
-				DisableInteraction();
-				if (mod.ModUrl != null)
-				{
-					await UpdateMod(_currentGameId, mod);
-				}
-				else
-				{
-					// Local unmanaged mod: look up an online source by name so the
-					// mod becomes managed and can be updated in future (issue #40).
-					// Falls back to the dedicated Link Online flow.
-					await LinkLocalModOnline(_currentGameId, mod);
-				}
-
-				SelectGame(_gamePickerButton.Selected);
-				DisableInteraction(false);
 				return;
 			}
+
+			var selectedMods = _modList.GetSelectedItems();
+			if (selectedMods.Length <= 0)
+			{
+				return;
+			}
+
+			var selectedModKey = _modList.GetItemMetadata(selectedMods.First()).AsString();
+
+			foreach (var mod in installedMods)
+			{
+				if (selectedModKey == ModKey(mod))
+				{
+					if (mod.ModUrl != null)
+					{
+						await UpdateMod(_currentGameId, mod);
+					}
+					else
+					{
+						// Local unmanaged mod: look up an online source by name so the
+						// mod becomes managed and can be updated in future (issue #40).
+						// Falls back to the dedicated Link Online flow.
+						await LinkLocalModOnline(_currentGameId, mod);
+					}
+
+					if (!_lifetimeCancellation.IsCancellationRequested && IsInstanceValid(_gamePickerButton))
+					{
+						SelectGame(_gamePickerButton.Selected);
+					}
+					return;
+				}
+			}
+		}
+		catch (Exception updateError)
+		{
+			Tools.Instance?.AddError($"Selected mod update failed: {updateError.Message}");
+		}
+		finally
+		{
+			EndOperation();
 		}
 	}
 
@@ -907,13 +1703,18 @@ public partial class ModManager : Control
 			return;
 		}
 
-		var match = await _bananaManager.FindOnlineSource(gameId, _installedGames, mod.ModName, (int)Sources.Banana);
+		var match = await _bananaManager.FindOnlineSource(
+			gameId, _installedGames, mod.ModName, (int)Sources.Banana, _lifetimeCancellation.Token);
 		if (match == null)
 		{
-			Tools.Instance.AddError($"Could not find an unambiguous online source for '{mod.ModName}'.");
+			Tools.Instance?.AddError($"Could not find an unambiguous online source for '{mod.ModName}'.");
 			return;
 		}
 
+		var oldId = mod.ModId;
+		var oldUrl = mod.ModUrl;
+		var oldSource = mod.Source;
+		var oldVersions = mod.CompatibleVersions;
 		mod.ModId = match.ModId;
 		mod.ModUrl = match.ModUrl;
 		mod.Source = match.Source;
@@ -922,104 +1723,251 @@ public partial class ModManager : Control
 			mod.CompatibleVersions = match.CompatibleVersions;
 		}
 
-		SaveInstalledMods();
+		if (!SaveInstalledMods())
+		{
+			mod.ModId = oldId;
+			mod.ModUrl = oldUrl;
+			mod.Source = oldSource;
+			mod.CompatibleVersions = oldVersions;
+			throw new IOException("Failed to persist linked mod metadata.");
+		}
 	}
 
 
 	private async void LinkOnlinePressed()
 	{
-		if (_currentGameId == null || !_installedMods.TryGetValue(_currentGameId, out var installedMods))
+		if (!BeginOperation())
 		{
 			return;
 		}
-
-		var selectedMods = _modList.GetSelectedItems();
-		if (selectedMods.Length <= 0)
+		try
 		{
-			Tools.Instance.AddError("Select an installed local mod first.");
-			return;
-		}
-
-		var selectedModName = (string)_modList.GetItemMetadata(selectedMods.First());
-		foreach (var mod in installedMods)
-		{
-			if (selectedModName != mod.ModName)
+			if (_currentGameId == null || !_installedMods.TryGetValue(_currentGameId, out var installedMods))
 			{
-				continue;
-			}
-
-			if (mod.ModUrl != null)
-			{
-				Tools.Instance.AddError($"'{mod.ModName}' is already linked to an online source.");
 				return;
 			}
 
-			DisableInteraction();
-			await LinkLocalModOnline(_currentGameId, mod);
-			SelectGame(_gamePickerButton.Selected);
-			DisableInteraction(false);
-			return;
+			var selectedMods = _modList.GetSelectedItems();
+			if (selectedMods.Length <= 0)
+			{
+				Tools.Instance?.AddError("Select an installed local mod first.");
+				return;
+			}
+
+			var selectedModKey = _modList.GetItemMetadata(selectedMods.First()).AsString();
+			foreach (var mod in installedMods)
+			{
+				if (selectedModKey != ModKey(mod))
+				{
+					continue;
+				}
+
+				if (mod.ModUrl != null)
+				{
+					Tools.Instance?.AddError($"'{mod.ModName}' is already linked to an online source.");
+					return;
+				}
+
+				await LinkLocalModOnline(_currentGameId, mod);
+				if (!_lifetimeCancellation.IsCancellationRequested && IsInstanceValid(_gamePickerButton))
+				{
+					SelectGame(_gamePickerButton.Selected);
+				}
+				return;
+			}
+		}
+		catch (Exception linkError)
+		{
+			Tools.Instance?.AddError($"Mod linking failed: {linkError.Message}");
+		}
+		finally
+		{
+			EndOperation();
 		}
 	}
 
 
 	private async void ModLocationPressed()
 	{
-		var picked = await Tools.Instance.PickFolder(ProviderSettings.ModsLocation);
-		if (picked != null)
+		if (!BeginOperation())
 		{
-			ProviderSettings.ModsLocation = picked;
-			Globals.Instance.SyncCurrentProviderSettings();
-			EnsureModsLocation();
+			return;
 		}
+		try
+		{
+			var picked = await Tools.Instance.PickFolder(ProviderSettings.ModsLocation);
+			if (picked != null && !_lifetimeCancellation.IsCancellationRequested)
+			{
+				var previousLocation = ProviderSettings.ModsLocation;
+				ProviderSettings.ModsLocation = picked;
+				if (!EnsureModsLocation())
+				{
+					ProviderSettings.ModsLocation = previousLocation;
+					throw new IOException("The selected mod location is not usable.");
+				}
+				if (!Globals.Instance.SyncCurrentProviderSettings())
+				{
+					ProviderSettings.ModsLocation = previousLocation;
+					Globals.Instance.SyncCurrentProviderSettings();
+					throw new IOException("Failed to persist the mod location.");
+				}
+			}
+			if (_lifetimeCancellation.IsCancellationRequested)
+			{
+				return;
+			}
 
-		_modLocationButton.Text = PadLabel(ProviderSettings.ModsLocation ?? "");
-		await Refresh(_selectedSource);
+			_modLocationButton.Text = PadLabel(ProviderSettings.ModsLocation ?? "");
+			await Refresh(_selectedSource);
+		}
+		catch (Exception locationError)
+		{
+			Tools.Instance?.AddError($"Failed to change the mod location: {locationError.Message}");
+		}
+		finally
+		{
+			EndOperation();
+		}
 	}
 
 
 	private async void RefreshPressed()
 	{
-		await Refresh(_selectedSource);
+		if (!BeginOperation())
+		{
+			return;
+		}
+		try
+		{
+			await Refresh(_selectedSource);
+		}
+		catch (Exception refreshError)
+		{
+			Tools.Instance?.AddError($"Refresh failed: {refreshError.Message}");
+		}
+		finally
+		{
+			EndOperation();
+		}
 	}
 
 
 	private void UpdateDownloadProgress()
 	{
-		if (_downloadRequester.GetBodySize() <= 0)
+		var bodySize = (long)_downloadRequester.GetBodySize();
+		var downloadedBytes = (long)_downloadRequester.GetDownloadedBytes();
+		if (bodySize > SafeArchive.MaximumDownloadBytes || downloadedBytes > SafeArchive.MaximumDownloadBytes)
+		{
+			_downloadRequester.CancelRequest();
+			return;
+		}
+
+		if (bodySize <= 0)
 		{
 			return;
 		}
 
-		_downloadBar.Value = (float)_downloadRequester.GetDownloadedBytes() / _downloadRequester.GetBodySize() * 100;
+		_downloadBar.Value = (float)downloadedBytes / bodySize * 100;
 	}
 
 
 	private async void SourceSelected(int selectedSource)
 	{
-		await SelectSource(selectedSource);
+		if (!BeginOperation())
+		{
+			return;
+		}
+		try
+		{
+			await SelectSource(selectedSource);
+		}
+		catch (Exception sourceError)
+		{
+			Tools.Instance?.AddError($"Failed to change mod source: {sourceError.Message}");
+		}
+		finally
+		{
+			EndOperation();
+		}
 	}
 
 
 	private async void AddGamePressed()
 	{
-		await AddGameFromInput(_manualGameIdLineEdit.Text);
+		if (!BeginOperation())
+		{
+			return;
+		}
+		try
+		{
+			await AddGameFromInput(_manualGameIdLineEdit.Text);
+		}
+		catch (OperationCanceledException)
+		{
+			return;
+		}
+		catch (Exception addError)
+		{
+			Tools.Instance?.AddError($"Failed to add game: {addError.Message}");
+		}
+		finally
+		{
+			EndOperation();
+		}
 	}
 
 
 	private async void AddGameTextSubmitted(string gameId)
 	{
-		await AddGameFromInput(gameId);
+		if (!BeginOperation())
+		{
+			return;
+		}
+		try
+		{
+			await AddGameFromInput(gameId);
+		}
+		catch (OperationCanceledException)
+		{
+			return;
+		}
+		catch (Exception addError)
+		{
+			Tools.Instance?.AddError($"Failed to add game: {addError.Message}");
+		}
+		finally
+		{
+			EndOperation();
+		}
 	}
 
 
 	private async void ClearModsPressed()
 	{
-		if (!await Tools.Instance.ConfirmationPopup("Remove all mods for selected title?"))
+		if (!BeginOperation())
 		{
 			return;
 		}
-		ClearMods();
+		try
+		{
+			if (!await Tools.Instance.ConfirmationPopup("Remove all manager-owned mods for selected title?"))
+			{
+				return;
+			}
+			await ClearMods();
+		}
+		catch (OperationCanceledException)
+		{
+			// Scene-owned work is canceled during provider switches and shutdown.
+		}
+		catch (Exception clearError)
+		{
+			Tools.Instance?.AddError($"Failed to clear mods: {clearError.Message}");
+		}
+		finally
+		{
+			EndOperation();
+		}
 	}
 
 

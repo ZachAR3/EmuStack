@@ -4,7 +4,7 @@
 
 EmuStack is a desktop utility for downloading, updating, launching, and managing Nintendo Switch emulator builds from multiple providers — the successor to the Yuzu Toolbox project.
 
-It is built with Godot 4.6 and C# (.NET 8) and runs on Windows, Linux, and macOS.
+It is built with Godot 4.7 and C# (.NET 8) and runs on Windows, Linux, and macOS.
 
 ## What it can do
 
@@ -69,4 +69,3 @@ Run EmuStack from the terminal with `--launcher` after an emulator is installed 
 - Donations: [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/R5R4NFO8V)
 
 The original Yuzu Toolbox codebase is preserved on the `legacy` branch for reference. `main` now tracks the EmuStack rewrite.
-

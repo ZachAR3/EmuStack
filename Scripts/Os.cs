@@ -12,6 +12,7 @@ public static class Os
 	{
 		"Windows" => OsKind.Windows,
 		"Linux" => OsKind.Linux,
-		_ => OsKind.MacOS,
+		"macOS" => OsKind.MacOS,
+		_ => throw new System.PlatformNotSupportedException($"EmuStack does not support platform '{osName}'."),
 	};
 }

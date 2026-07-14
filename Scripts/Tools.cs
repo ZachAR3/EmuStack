@@ -1,6 +1,7 @@
 using Godot;
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using HtmlAgilityPack;
@@ -53,14 +54,61 @@ public partial class Tools : Node
 	}
 
 
+	public override void _ExitTree()
+	{
+		_confirmationSource?.TrySetResult(false);
+		_folderPickerSource?.TrySetResult(null);
+		if (Instance == this)
+		{
+			Instance = null;
+		}
+	}
+
+
 	public void LaunchEmulator()
 	{
-		var executablePath = Globals.Instance.CurrentProviderSettings.ExecutablePath;
+		var configuredPath = Globals.Instance.CurrentProviderSettings.ExecutablePath;
 		var emulatorName = Globals.Instance.AppMode.Name;
 
 		try
 		{
-			Process.Start(new ProcessStartInfo(executablePath));
+			if (string.IsNullOrWhiteSpace(configuredPath))
+			{
+				throw new FileNotFoundException("No emulator executable is configured.");
+			}
+			var executablePath = FsHelpers.CanonicalPath(configuredPath);
+			var isMacApp = OperatingSystem.IsMacOS() && Directory.Exists(executablePath) &&
+				executablePath.EndsWith(".app", StringComparison.OrdinalIgnoreCase);
+			if (isMacApp)
+			{
+				FsHelpers.EnsureNoReparseTree(executablePath);
+			}
+			else
+			{
+				FsHelpers.EnsureNoReparsePoints(executablePath);
+			}
+			if (!File.Exists(executablePath) && !isMacApp)
+			{
+				throw new FileNotFoundException("The configured emulator executable was not found.", executablePath);
+			}
+
+			Process process;
+			if (OperatingSystem.IsMacOS() && Directory.Exists(executablePath) &&
+			    executablePath.EndsWith(".app", StringComparison.OrdinalIgnoreCase))
+			{
+				var startInfo = new ProcessStartInfo("/usr/bin/open") { UseShellExecute = false };
+				startInfo.ArgumentList.Add("--");
+				startInfo.ArgumentList.Add(executablePath);
+				process = Process.Start(startInfo);
+			}
+			else
+			{
+				process = Process.Start(new ProcessStartInfo(executablePath) { UseShellExecute = true });
+			}
+			if (process == null)
+			{
+				throw new InvalidOperationException("The operating system did not start a process.");
+			}
 			GetTree().Quit();
 		}
 		catch (Exception launchException)
@@ -137,11 +185,27 @@ public partial class Tools : Node
 		var formattedError = FormatError(error);
 		Callable.From(() =>
 		{
+			if (!IsInstanceValid(this) || !IsInstanceValid(_errorConsole) || !IsInstanceValid(_errorNotifier))
+			{
+				return;
+			}
 			_errorConsole.Text += $"\n [{DateTime.Now:h:mm:ss}]	{formattedError}";
 			_errorNotifier.Visible = true;
 		}).CallDeferred();
 
-		await ToSignal(GetTree().CreateTimer(5), "timeout");
+		try
+		{
+			var tree = GetTree();
+			if (!IsInstanceValid(this) || !IsInstanceValid(tree))
+			{
+				return;
+			}
+			await ToSignal(tree.CreateTimer(5), "timeout");
+		}
+		catch (Exception)
+		{
+			return;
+		}
 
 		// The Tools node (and its UI refs) can be freed while the timer runs, e.g. when
 		// the user switches provider and the scene reloads. Guard before touching nodes.

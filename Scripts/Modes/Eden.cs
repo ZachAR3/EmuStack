@@ -5,6 +5,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using HtmlAgilityPack;
 
@@ -39,7 +40,8 @@ public class ModeEden : Mode
 	public override async Task<List<ProviderRelease>> GetAvailableReleases(
 		HttpClient httpClient,
 		OsKind os,
-		string releaseChannel)
+		string releaseChannel,
+		CancellationToken cancellationToken = default)
 	{
 		var assetLinks = new List<EdenAssetLink>();
 
@@ -47,13 +49,13 @@ public class ModeEden : Mode
 		for (var page = 1; page <= MaxReleasePages; page++)
 		{
 			var pageUrl = page == 1 ? ReleasePageUrl : $"{ReleasePageUrl}?page={page}";
-			var response = await httpClient.GetAsync(pageUrl);
+			using var response = await httpClient.GetAsync(pageUrl, cancellationToken);
 			if (!response.IsSuccessStatusCode)
 			{
 				break;
 			}
 
-			var pageHtml = await response.Content.ReadAsStringAsync();
+			var pageHtml = await response.Content.ReadAsStringAsync(cancellationToken);
 			var linksOnPage = ParseAssetLinks(pageHtml);
 			if (linksOnPage.Count == 0)
 			{
@@ -110,8 +112,16 @@ public class ModeEden : Mode
 				Url = link.GetAttributeValue("href", ""),
 				Text = HtmlEntity.DeEntitize(link.InnerText).Trim()
 			})
-			.Where(link => link.Url.Contains("stable.eden-emu.dev") && IsInstallableAsset(link.FileName))
+			.Where(link => IsOfficialAssetUrl(link.Url) && IsInstallableAsset(link.FileName))
 			.ToList() ?? new List<EdenAssetLink>();
+	}
+
+
+	private static bool IsOfficialAssetUrl(string value)
+	{
+		return Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+			uri.Scheme == Uri.UriSchemeHttps &&
+			string.Equals(uri.Host, "stable.eden-emu.dev", StringComparison.OrdinalIgnoreCase);
 	}
 
 
@@ -141,16 +151,13 @@ public class ModeEden : Mode
 
 	private static Version GetSortableVersion(string version)
 	{
-		// Strip pre-release suffix for sortable Version parsing — release candidates
-		// sort below their stable counterpart by treating the suffix as a negative offset.
+		// Strip pre-release suffix for sortable Version parsing; the revision below
+		// keeps release candidates below their stable counterpart.
 		var baseVersion = NormalizeVersion(version);
-		var preReleaseOffset = 0;
 		var rcMatch = Regex.Match(version, @"-rc(\d+)$", RegexOptions.IgnoreCase);
 		if (rcMatch.Success)
 		{
 			baseVersion = NormalizeVersion(version[..rcMatch.Index]);
-			// RC N sorts before stable by subtracting a fraction; -rc1 → -0.9, -rc2 → -0.8, etc.
-			preReleaseOffset = -100 + int.Parse(rcMatch.Groups[1].Value);
 		}
 
 		var versionParts = baseVersion.Split('.').ToList();

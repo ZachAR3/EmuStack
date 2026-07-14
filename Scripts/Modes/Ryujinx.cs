@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading;
 using System.Threading.Tasks;
 
 
@@ -43,32 +44,39 @@ public class ModeRyubing : Mode
 	public override async Task<List<ProviderRelease>> GetAvailableReleases(
 		HttpClient httpClient,
 		OsKind os,
-		string releaseChannel)
+		string releaseChannel,
+		CancellationToken cancellationToken = default)
 	{
 		// Prefer the update server: it's the official lightweight path and offloads
 		// the Forgejo frontend. It returns only the latest release, but with a
 		// direct download_url so no Forgejo asset lookup is needed.
-		var latest = await TryGetLatestFromUpdateServer(httpClient, os, releaseChannel);
+		var latest = await TryGetLatestFromUpdateServer(httpClient, os, releaseChannel, cancellationToken);
 		if (latest != null)
 		{
 			return new List<ProviderRelease> { latest };
 		}
 
 		// Update server unreachable — silently fall back to the Forgejo API.
-		return await FetchAllForgejoReleases(httpClient, os);
+		return await FetchAllForgejoReleases(httpClient, os, cancellationToken);
 	}
 
 	public override async Task<ProviderRelease> GetLatestRelease(
 		HttpClient httpClient,
 		OsKind os,
-		string releaseChannel)
+		string releaseChannel,
+		CancellationToken cancellationToken = default)
 	{
-		return await TryGetLatestFromUpdateServer(httpClient, os, releaseChannel)
-		       ?? (await FetchAllForgejoReleases(httpClient, os)).FirstOrDefault();
+		return await TryGetLatestFromUpdateServer(httpClient, os, releaseChannel, cancellationToken)
+		       ?? (await FetchAllForgejoReleases(httpClient, os, cancellationToken)).FirstOrDefault();
 	}
 
 	public override ProviderRelease BuildCustomRelease(string version, OsKind os, string releaseChannel)
 	{
+		if (!IsValidCustomVersion(version))
+		{
+			return null;
+		}
+
 		var normalizedVersion = NormalizeVersion(version);
 		return BuildReleaseFromConvention(normalizedVersion, os);
 	}
@@ -86,14 +94,15 @@ public class ModeRyubing : Mode
 	private static async Task<ProviderRelease> TryGetLatestFromUpdateServer(
 		HttpClient httpClient,
 		OsKind os,
-		string releaseChannel)
+		string releaseChannel,
+		CancellationToken cancellationToken)
 	{
 		var channel = NormalizeChannel(releaseChannel);
 		var osToken = GetOsToken(os);
 		var archToken = GetArchToken();
 
 		var url = $"{UpdateServerBaseUrl}/latest/query?os={osToken}&arch={archToken}&rc={channel}";
-		var response = await TryGetUpdateServerResponse(httpClient, url);
+		var response = await TryGetUpdateServerResponse(httpClient, url, cancellationToken);
 		if (response == null || string.IsNullOrEmpty(response.Tag))
 		{
 			return null;
@@ -115,25 +124,29 @@ public class ModeRyubing : Mode
 
 		// Update server returned a tag but no download URL — resolve via Forgejo as a
 		// silent fallback, then convention-based construction as a last resort.
-		return await FetchForgejoRelease(httpClient, os, response.Tag)
+		return await FetchForgejoRelease(httpClient, os, response.Tag, cancellationToken)
 		       ?? BuildReleaseFromConvention(version, os);
 	}
 
 
-	private static async Task<UpdateServerResponse> TryGetUpdateServerResponse(HttpClient httpClient, string url)
+	private static async Task<UpdateServerResponse> TryGetUpdateServerResponse(HttpClient httpClient, string url, CancellationToken cancellationToken)
 	{
 		try
 		{
-			var response = await httpClient.GetAsync(url);
+			using var response = await httpClient.GetAsync(url, cancellationToken);
 			if (!response.IsSuccessStatusCode)
 			{
 				return null;
 			}
 
-			var json = await response.Content.ReadAsStringAsync();
+			var json = await response.Content.ReadAsStringAsync(cancellationToken);
 			return JsonSerializer.Deserialize<UpdateServerResponse>(json, JsonOptions.Default);
 		}
 		catch (HttpRequestException)
+		{
+			return null;
+		}
+		catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
 		{
 			return null;
 		}
@@ -148,10 +161,10 @@ public class ModeRyubing : Mode
 	}
 
 
-	private static async Task<List<ProviderRelease>> FetchAllForgejoReleases(HttpClient httpClient, OsKind os)
+	private static async Task<List<ProviderRelease>> FetchAllForgejoReleases(HttpClient httpClient, OsKind os, CancellationToken cancellationToken)
 	{
 		var url = $"{ForgejoApiBaseUrl}/releases?limit=30&pre_release=false";
-		var forgejoReleases = await TryGetForgejoJson<List<ForgejoRelease>>(httpClient, url);
+		var forgejoReleases = await TryGetForgejoJson<List<ForgejoRelease>>(httpClient, url, cancellationToken);
 		if (forgejoReleases == null || forgejoReleases.Count == 0)
 		{
 			return new List<ProviderRelease>();
@@ -173,10 +186,10 @@ public class ModeRyubing : Mode
 			.ToList();
 	}
 
-	private static async Task<ProviderRelease> FetchForgejoRelease(HttpClient httpClient, OsKind os, string tag)
+	private static async Task<ProviderRelease> FetchForgejoRelease(HttpClient httpClient, OsKind os, string tag, CancellationToken cancellationToken)
 	{
 		var url = $"{ForgejoApiBaseUrl}/releases/tags/{Uri.EscapeDataString(tag)}";
-		var forgejoRelease = await TryGetForgejoJson<ForgejoRelease>(httpClient, url);
+		var forgejoRelease = await TryGetForgejoJson<ForgejoRelease>(httpClient, url, cancellationToken);
 		if (forgejoRelease == null)
 		{
 			return null;
@@ -185,14 +198,15 @@ public class ModeRyubing : Mode
 		return SelectAsset(forgejoRelease, os);
 	}
 
-	private static async Task<T> TryGetForgejoJson<T>(HttpClient httpClient, string url)
+	private static async Task<T> TryGetForgejoJson<T>(HttpClient httpClient, string url, CancellationToken cancellationToken)
 	{
 		try
 		{
-			using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(ForgejoApiTimeoutSeconds));
-			var request = new HttpRequestMessage(HttpMethod.Get, url);
+			using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+			cts.CancelAfter(TimeSpan.FromSeconds(ForgejoApiTimeoutSeconds));
+			using var request = new HttpRequestMessage(HttpMethod.Get, url);
 			request.Headers.UserAgent.ParseAdd(ForgejoUserAgent);
-			var response = await httpClient.SendAsync(request, cts.Token);
+			using var response = await httpClient.SendAsync(request, cts.Token);
 			if (!response.IsSuccessStatusCode)
 			{
 				return default;
@@ -200,6 +214,10 @@ public class ModeRyubing : Mode
 
 			var json = await response.Content.ReadAsStringAsync(cts.Token);
 			return JsonSerializer.Deserialize<T>(json, JsonOptions.Default);
+		}
+		catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+		{
+			throw;
 		}
 		catch (Exception)
 		{

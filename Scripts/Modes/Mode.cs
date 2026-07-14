@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 
@@ -16,6 +18,8 @@ public abstract class Mode
 	public virtual string DefaultAppDataDirectoryName => Id;
 	public virtual string DefaultReleaseChannel => "stable";
 	public virtual bool SupportsCustomVersions => true;
+	public virtual bool IsValidCustomVersion(string version) =>
+		!string.IsNullOrWhiteSpace(version) && Regex.IsMatch(version.Trim(), @"^v?[A-Za-z0-9][A-Za-z0-9._-]{0,63}$");
 
 	public virtual IEnumerable<string> LegacyExecutableNames => Array.Empty<string>();
 	protected virtual IEnumerable<string> LinuxExecutableSuffixes => new[] { "" };
@@ -23,23 +27,26 @@ public abstract class Mode
 	public abstract Task<List<ProviderRelease>> GetAvailableReleases(
 		HttpClient httpClient,
 		OsKind os,
-		string releaseChannel);
+		string releaseChannel,
+		CancellationToken cancellationToken = default);
 
 	public virtual async Task<ProviderRelease> GetLatestRelease(
 		HttpClient httpClient,
 		OsKind os,
-		string releaseChannel)
+		string releaseChannel,
+		CancellationToken cancellationToken = default)
 	{
-		return (await GetAvailableReleases(httpClient, os, releaseChannel)).FirstOrDefault();
+		return (await GetAvailableReleases(httpClient, os, releaseChannel, cancellationToken)).FirstOrDefault();
 	}
 
 	public virtual async Task<ProviderRelease> GetRelease(
 		string version,
 		HttpClient httpClient,
 		OsKind os,
-		string releaseChannel)
+		string releaseChannel,
+		CancellationToken cancellationToken = default)
 	{
-		var releases = await GetAvailableReleases(httpClient, os, releaseChannel);
+		var releases = await GetAvailableReleases(httpClient, os, releaseChannel, cancellationToken);
 		var release = releases.FirstOrDefault(candidate =>
 			string.Equals(candidate.Version, version, StringComparison.OrdinalIgnoreCase) ||
 			string.Equals(candidate.DisplayName, version, StringComparison.OrdinalIgnoreCase));
@@ -49,7 +56,9 @@ public abstract class Mode
 			return release;
 		}
 
-		return SupportsCustomVersions ? BuildCustomRelease(version, os, releaseChannel) : null;
+		return SupportsCustomVersions && IsValidCustomVersion(version)
+			? BuildCustomRelease(version, os, releaseChannel)
+			: null;
 	}
 
 	public virtual ProviderRelease BuildCustomRelease(string version, OsKind os, string releaseChannel)
@@ -179,7 +188,7 @@ public abstract class Mode
 
 	protected static string GetSafeFileName(string value)
 	{
-		var safeName = value;
+		var safeName = Path.GetFileName(value ?? "");
 		foreach (var invalidChar in Path.GetInvalidFileNameChars())
 		{
 			safeName = safeName.Replace(invalidChar, '-');

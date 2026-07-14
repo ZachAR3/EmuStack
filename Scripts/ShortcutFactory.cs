@@ -1,6 +1,5 @@
 using Godot;
 using System;
-using System.Diagnostics;
 using System.IO;
 using WindowsShortcutFactory;
 
@@ -9,17 +8,30 @@ public static class ShortcutFactory
 {
 	public static void Create(Mode mode, OsKind os, string executable, string launcherFlag, string saveDirectory, Image icon)
 	{
-		switch (os)
+		try
 		{
-			case OsKind.Linux:
-				CreateLinux(mode, executable, launcherFlag, saveDirectory, icon);
-				break;
-			case OsKind.Windows:
-				CreateWindows(mode, executable, launcherFlag, saveDirectory);
-				break;
-			default:
-				Tools.Instance.AddError("Shortcut creation is not supported on this platform.");
-				break;
+			var safeSaveDirectory = FsHelpers.CanonicalPath(saveDirectory);
+			FsHelpers.RejectDangerousRoot(safeSaveDirectory);
+			FsHelpers.EnsureNoReparsePoints(safeSaveDirectory);
+			Directory.CreateDirectory(safeSaveDirectory);
+			FsHelpers.EnsureNoReparsePoints(safeSaveDirectory);
+
+			switch (os)
+			{
+				case OsKind.Linux:
+					CreateLinux(mode, executable, launcherFlag, safeSaveDirectory, icon);
+					break;
+				case OsKind.Windows:
+					CreateWindows(mode, executable, launcherFlag, safeSaveDirectory);
+					break;
+				default:
+					Tools.Instance?.AddError("Shortcut creation is not supported on this platform.");
+					break;
+			}
+		}
+		catch (Exception shortcutError)
+		{
+			Tools.Instance?.AddError($"Shortcut creation failed: {shortcutError.Message}");
 		}
 	}
 
@@ -28,12 +40,12 @@ public static class ShortcutFactory
 	{
 		var shortcutName = $"{mode.Id}.desktop";
 		var iconPath = Path.Join(saveDirectory, "Icon.png");
-		icon.SavePng(iconPath);
 
+		var arguments = string.IsNullOrWhiteSpace(launcherFlag) ? "" : " " + QuoteDesktopExecArg(launcherFlag);
 		var shortcutContent = $@"
 [Desktop Entry]
 Comment={mode.DesktopEntryComment}
-Exec={executable} {launcherFlag}
+Exec={QuoteDesktopExecArg(executable)}{arguments}
 GenericName=Switch Emulator
 Icon={iconPath}
 MimeType=
@@ -47,33 +59,66 @@ Keywords=Nintendo;Switch;
 Categories={mode.DesktopEntryCategories}
 ";
 
-		const string systemApplicationsPath = "/usr/share/applications/";
-		if (!Directory.Exists(systemApplicationsPath))
+		var dataHome = System.Environment.GetEnvironmentVariable("XDG_DATA_HOME");
+		if (string.IsNullOrWhiteSpace(dataHome) || !Path.IsPathRooted(dataHome))
 		{
-			Tools.Instance.AddError("Cannot find shortcut directory, please place manually.");
-			return;
+			dataHome = Path.Join(System.Environment.GetFolderPath(System.Environment.SpecialFolder.UserProfile), ".local", "share");
 		}
-
-		var shortcutPath = Path.Join(systemApplicationsPath, shortcutName);
+		var applicationsPath = FsHelpers.CanonicalPath(Path.Join(dataHome, "applications"));
+		FsHelpers.RejectDangerousRoot(applicationsPath);
+		var shortcutPath = Path.Join(applicationsPath, shortcutName);
+		string iconTemporary = null;
 		try
 		{
-			var tempShortcutPath = Path.Join(saveDirectory, shortcutName);
-			File.WriteAllText(tempShortcutPath, shortcutContent);
-			using var process = Process.Start(new ProcessStartInfo
-			{
-				FileName = "pkexec",
-				Arguments = $"mv {tempShortcutPath} {shortcutPath}",
-				UseShellExecute = false,
-			});
-			process?.WaitForExit();
+			iconTemporary = iconPath + ".tmp-" + Guid.NewGuid().ToString("N");
+			FsHelpers.EnsureNoReparsePoints(iconPath);
+			FsHelpers.EnsureNoReparsePoints(iconTemporary);
+			icon.SavePng(iconTemporary);
+			FsHelpers.AtomicReplaceFile(iconTemporary, iconPath);
+			Directory.CreateDirectory(applicationsPath);
+			FsHelpers.AtomicWriteText(shortcutPath, shortcutContent);
 		}
 		catch (Exception shortcutError)
 		{
 			var fallbackPath = Path.Join(saveDirectory, shortcutName);
-			Tools.Instance.AddError(
+			Tools.Instance?.AddError(
 				$@"Error creating shortcut, creating new at {fallbackPath}. Error:{shortcutError}");
-			File.WriteAllText(fallbackPath, shortcutContent);
+			try
+			{
+				FsHelpers.AtomicWriteText(fallbackPath, shortcutContent);
+			}
+			catch (Exception fallbackError)
+			{
+				Tools.Instance?.AddError($"Shortcut fallback failed: {fallbackError.Message}");
+			}
 		}
+		finally
+		{
+			if (!string.IsNullOrEmpty(iconTemporary) && File.Exists(iconTemporary))
+			{
+				try
+				{
+					FsHelpers.EnsureNoReparsePoints(iconTemporary);
+					File.Delete(iconTemporary);
+				}
+				catch (Exception cleanupError)
+				{
+					Tools.Instance?.AddError($"Shortcut temporary-file cleanup failed: {cleanupError.Message}");
+				}
+			}
+		}
+	}
+
+
+	private static string QuoteDesktopExecArg(string value)
+	{
+		var escaped = value
+			.Replace("\\", "\\\\")
+			.Replace("\"", "\\\"")
+			.Replace("`", "\\`")
+			.Replace("$", "\\$")
+			.Replace("%", "%%");
+		return $"\"{escaped}\"";
 	}
 
 
@@ -93,15 +138,26 @@ Categories={mode.DesktopEntryCategories}
 
 		try
 		{
+			FsHelpers.EnsureNoReparsePoints(emulatorStartMenuPath);
 			Directory.CreateDirectory(emulatorStartMenuPath);
+			FsHelpers.EnsureNoReparsePoints(emulatorStartMenuPath);
+			FsHelpers.EnsureNoReparsePoints(emulatorShortcutPath);
 			windowsShortcut.Save(emulatorShortcutPath);
 		}
 		catch (Exception shortcutError)
 		{
 			var fallbackPath = Path.Join(saveDirectory, shortcutName);
-			Tools.Instance.AddError(
+			Tools.Instance?.AddError(
 				$@"cannot create shortcut, ensure app is running as admin. Placing instead at {fallbackPath}. Exception:{shortcutError}");
-			windowsShortcut.Save(fallbackPath);
+			try
+			{
+				FsHelpers.EnsureNoReparsePoints(fallbackPath);
+				windowsShortcut.Save(fallbackPath);
+			}
+			catch (Exception fallbackError)
+			{
+				Tools.Instance?.AddError($"Shortcut fallback failed: {fallbackError.Message}");
+			}
 		}
 	}
 }

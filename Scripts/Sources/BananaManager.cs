@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using HttpClient = System.Net.Http.HttpClient;
@@ -25,32 +26,32 @@ public class BananaManager
 	}
 
 
-	public async Task<List<Mod>> GetAvailableMods(string gameId, Dictionary<string, string> installedGames, int sourceId, int page)
+	public async Task<List<Mod>> GetAvailableMods(string gameId, Dictionary<string, string> installedGames, int sourceId, int page, CancellationToken cancellationToken = default)
 	{
 		if (!installedGames.TryGetValue(gameId, out var gameName))
 		{
 			return new List<Mod>();
 		}
 
-		var bananaGameId = await ResolveGameBananaGameId(gameName);
+		var bananaGameId = await ResolveGameBananaGameId(gameName, cancellationToken);
 		if (bananaGameId == -1)
 		{
-			Tools.Instance.AddError($"Could not find '{gameName}' on GameBanana. Mods for this title will be unavailable.");
+			Tools.Instance?.AddError($"Could not find '{gameName}' on GameBanana. Mods for this title will be unavailable.");
 			return new List<Mod>();
 		}
 
-		return await FetchMods(bananaGameId, sourceId, page, searchQuery: null);
+		return await FetchMods(bananaGameId, sourceId, page, searchQuery: null, cancellationToken);
 	}
 
 
-	public async Task<List<Mod>> SearchMods(string gameId, Dictionary<string, string> installedGames, int sourceId, string query)
+	public async Task<List<Mod>> SearchMods(string gameId, Dictionary<string, string> installedGames, int sourceId, string query, CancellationToken cancellationToken = default)
 	{
 		if (!installedGames.TryGetValue(gameId, out var gameName))
 		{
 			return new List<Mod>();
 		}
 
-		var bananaGameId = await ResolveGameBananaGameId(gameName);
+		var bananaGameId = await ResolveGameBananaGameId(gameName, cancellationToken);
 		if (bananaGameId == -1)
 		{
 			return new List<Mod>();
@@ -64,7 +65,7 @@ public class BananaManager
 
 		for (var page = 1; page <= MaxSearchPages; page++)
 		{
-			var pageMods = await FetchMods(bananaGameId, sourceId, page, searchQuery: query);
+			var pageMods = await FetchMods(bananaGameId, sourceId, page, searchQuery: query, cancellationToken);
 			if (pageMods.Count == 0)
 			{
 				break;
@@ -73,7 +74,10 @@ public class BananaManager
 			var addedFromPage = false;
 			foreach (var mod in pageMods)
 			{
-				if (!string.IsNullOrEmpty(mod.ModId) && !seenModIds.Add(mod.ModId))
+				var deduplicationKey = !string.IsNullOrEmpty(mod.ModId)
+					? $"id:{mod.ModId}"
+					: $"url:{mod.ModUrl}|name:{mod.ModName}";
+				if (!seenModIds.Add(deduplicationKey))
 				{
 					continue;
 				}
@@ -97,14 +101,14 @@ public class BananaManager
 	/// so it can be treated as a managed mod going forward (issue #40). Returns the
 	/// match only when unambiguous: an exact name match, or a single search result.
 	/// </summary>
-	public async Task<Mod> FindOnlineSource(string gameId, Dictionary<string, string> installedGames, string modName, int sourceId)
+	public async Task<Mod> FindOnlineSource(string gameId, Dictionary<string, string> installedGames, string modName, int sourceId, CancellationToken cancellationToken = default)
 	{
 		if (string.IsNullOrWhiteSpace(modName))
 		{
 			return null;
 		}
 
-		var results = await SearchMods(gameId, installedGames, sourceId, modName);
+		var results = await SearchMods(gameId, installedGames, sourceId, modName, cancellationToken);
 		if (results.Count == 0)
 		{
 			return null;
@@ -118,7 +122,7 @@ public class BananaManager
 	}
 
 
-	private async Task<List<Mod>> FetchMods(int bananaGameId, int sourceId, int page, string searchQuery)
+	private async Task<List<Mod>> FetchMods(int bananaGameId, int sourceId, int page, string searchQuery, CancellationToken cancellationToken)
 	{
 		var url = $"{ApiBase}/Game/{bananaGameId}/Subfeed?_nPage={page}";
 		if (!string.IsNullOrEmpty(searchQuery))
@@ -126,13 +130,13 @@ public class BananaManager
 			url += $"&_sName={Uri.EscapeDataString(searchQuery)}";
 		}
 
-		var response = await _httpClient.GetAsync(url);
+		using var response = await _httpClient.GetAsync(url, cancellationToken);
 		if (!response.IsSuccessStatusCode)
 		{
 			return new List<Mod>();
 		}
 
-		var json = JObject.Parse(await response.Content.ReadAsStringAsync());
+		var json = JObject.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
 		var records = json["_aRecords"] as JArray;
 		if (records == null)
 		{
@@ -154,7 +158,7 @@ public class BananaManager
 				continue;
 			}
 
-			var mod = await ParseModRecord(record, sourceId);
+			var mod = await ParseModRecord(record, sourceId, cancellationToken);
 			if (mod != null)
 			{
 				mods.Add(mod);
@@ -165,7 +169,7 @@ public class BananaManager
 	}
 
 
-	private async Task<Mod> ParseModRecord(JToken record, int sourceId)
+	private async Task<Mod> ParseModRecord(JToken record, int sourceId, CancellationToken cancellationToken)
 	{
 		var modId = record["_idRow"]?.ToString() ?? "";
 		var modName = record["_sName"]?.ToString() ?? "";
@@ -173,13 +177,13 @@ public class BananaManager
 		// Fetch the download URL from the files endpoint. A mod may have multiple
 		// files (variants); take the first one — EmuStack installs the mod as a
 		// single archive.
-		var filesResponse = await _httpClient.GetAsync($"{ApiBase}/Mod/{modId}/Files");
+		using var filesResponse = await _httpClient.GetAsync($"{ApiBase}/Mod/{modId}/Files", cancellationToken);
 		if (!filesResponse.IsSuccessStatusCode)
 		{
 			return null;
 		}
 
-		var filesJson = JToken.Parse(await filesResponse.Content.ReadAsStringAsync());
+		var filesJson = JToken.Parse(await filesResponse.Content.ReadAsStringAsync(cancellationToken));
 		var firstFile = filesJson?.FirstOrDefault();
 		var downloadUrl = firstFile?["_sDownloadUrl"]?.ToString();
 		if (string.IsNullOrEmpty(downloadUrl))
@@ -232,20 +236,20 @@ public class BananaManager
 	}
 
 
-	private async Task<int> ResolveGameBananaGameId(string gameName)
+	private async Task<int> ResolveGameBananaGameId(string gameName, CancellationToken cancellationToken)
 	{
 		if (_gameIdCache.TryGetValue(gameName, out var cachedId))
 		{
 			return cachedId;
 		}
 
-		var response = await _httpClient.GetAsync($"{ApiBase}/Util/Game/NameMatch?_sName={Uri.EscapeDataString(gameName)}");
+		using var response = await _httpClient.GetAsync($"{ApiBase}/Util/Game/NameMatch?_sName={Uri.EscapeDataString(gameName)}", cancellationToken);
 		if (!response.IsSuccessStatusCode)
 		{
 			return -1;
 		}
 
-		var json = JObject.Parse(await response.Content.ReadAsStringAsync());
+		var json = JObject.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
 		var records = json["_aRecords"] as JArray;
 		if (records == null || records.Count == 0)
 		{

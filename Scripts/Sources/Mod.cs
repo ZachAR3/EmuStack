@@ -3,6 +3,7 @@ using System.Collections.Generic;
 
 public class Mod
 {
+	public string StableId { get; set; } = "";
 	public string ModId { get; set; } = "";
 	public string ModName { get; set; }
 	public string ModUrl { get; set; }

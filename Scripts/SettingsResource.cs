@@ -22,9 +22,10 @@ public partial class SettingsResource : Resource
 
 	public ProviderSettingsResource GetProviderSettings(string providerId)
 	{
+		ProviderSettings ??= new Array<ProviderSettingsResource>();
 		foreach (var providerSettings in ProviderSettings)
 		{
-			if (providerSettings.ProviderId == providerId)
+			if (providerSettings != null && providerSettings.ProviderId == providerId)
 			{
 				return providerSettings;
 			}
@@ -35,4 +36,3 @@ public partial class SettingsResource : Resource
 		return newProviderSettings;
 	}
 }
-
