@@ -1,5 +1,6 @@
 using Godot;
 using System;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -74,14 +75,15 @@ public partial class ToolsPage : Control
 		var installOwner = $"install:{Globals.Instance.AppMode.Id}";
 		try
 		{
-			_lifetimeCancellation.Token.ThrowIfCancellationRequested();
-			await Task.Run(() => FsHelpers.DeleteOwnedDirectoryContents(
-				installDirectory,
-				installOwner), _lifetimeCancellation.Token);
+			await ClearInstallDirectory(installDirectory, installOwner, _lifetimeCancellation.Token);
 			if (!_exiting && IsInstanceValid(_clearInstallFolderButton))
 			{
 				_clearInstallFolderButton.Text = "Cleared successfully!";
 			}
+		}
+		catch (OperationCanceledException) when (_exiting)
+		{
+			// The operation had not begun mutating the install when cancellation won.
 		}
 		catch (Exception clearError)
 		{
@@ -117,7 +119,8 @@ public partial class ToolsPage : Control
 				source,
 				destination,
 				preserveDestinationFiles: false,
-				requiredDestinationOwner: backupOwner), _lifetimeCancellation.Token);
+				requiredDestinationOwner: backupOwner,
+				cancellationToken: _lifetimeCancellation.Token), _lifetimeCancellation.Token);
 			if (!_exiting && IsInstanceValid(_backupSavesButton))
 			{
 				_backupSavesButton.Text = "Backup successful!";
@@ -156,7 +159,8 @@ public partial class ToolsPage : Control
 				source,
 				destination,
 				preserveDestinationFiles: true,
-				requiredSourceOwner: backupOwner), _lifetimeCancellation.Token);
+				requiredSourceOwner: backupOwner,
+				cancellationToken: _lifetimeCancellation.Token), _lifetimeCancellation.Token);
 			if (!_exiting && IsInstanceValid(_restoreSavesButton))
 			{
 				_restoreSavesButton.Text = "Saves restored successfully!";
@@ -299,6 +303,118 @@ public partial class ToolsPage : Control
 		FsHelpers.RejectDangerousRoot(canonicalPath);
 		FsHelpers.EnsureNoReparsePoints(canonicalPath);
 		return canonicalPath;
+	}
+
+
+	private async Task ClearInstallDirectory(
+		string installDirectory,
+		string installOwner,
+		CancellationToken cancellationToken)
+	{
+		cancellationToken.ThrowIfCancellationRequested();
+		var installPath = FsHelpers.CanonicalPath(installDirectory);
+		FsHelpers.RejectDangerousRoot(installPath);
+		FsHelpers.EnsureNoReparseTree(installPath);
+		if (!FsHelpers.IsOwnedDirectory(installPath, installOwner))
+		{
+			throw new InvalidOperationException("The configured install directory is not owned by EmuStack.");
+		}
+
+		var parent = Path.GetDirectoryName(installPath) ??
+			throw new InvalidOperationException("Install directory has no parent.");
+		var operationOwner = $"operation:{Guid.NewGuid():N}";
+		var operationRoot = Path.Join(parent, $".{Path.GetFileName(installPath)}-emustack-{Guid.NewGuid():N}");
+		var clearedPath = Path.Join(operationRoot, "deploy");
+		var previousPath = Path.Join(operationRoot, "previous");
+		var settings = Globals.Instance.CurrentProviderSettings;
+		var previousVersion = settings.InstalledVersion;
+		var previousExecutable = settings.ExecutablePath;
+		var filesystemCommitted = false;
+		var preserveForRecovery = false;
+
+		try
+		{
+			Directory.CreateDirectory(operationRoot);
+			FsHelpers.MarkOwnedDirectory(operationRoot, operationOwner);
+			FsHelpers.AtomicWriteText(Path.Join(operationRoot, "install.path"), installPath);
+			FsHelpers.AtomicWriteText(Path.Join(operationRoot, "owner"), installOwner);
+			FsHelpers.AtomicWriteText(Path.Join(operationRoot, "previous.version"), previousVersion ?? "");
+			FsHelpers.AtomicWriteText(Path.Join(operationRoot, "previous.executable"), previousExecutable ?? "");
+			FsHelpers.AtomicWriteText(Path.Join(operationRoot, "previous.present"), "true");
+			FsHelpers.AtomicWriteText(Path.Join(operationRoot, "phase"), "staging");
+			FsHelpers.MarkOwnedDirectory(clearedPath, installOwner);
+
+			cancellationToken.ThrowIfCancellationRequested();
+			FsHelpers.AtomicWriteText(Path.Join(operationRoot, "phase"), "swapping");
+			Directory.Move(installPath, previousPath);
+			Directory.Move(clearedPath, installPath);
+			filesystemCommitted = true;
+			FsHelpers.AtomicWriteText(Path.Join(operationRoot, "phase"), "filesystem-committed");
+
+			settings.InstalledVersion = "";
+			settings.ExecutablePath = "";
+			if (!Globals.Instance.SyncCurrentProviderSettings())
+			{
+				throw new IOException("Failed to persist cleared emulator install state.");
+			}
+			FsHelpers.AtomicWriteText(Path.Join(operationRoot, "phase"), "state-committed");
+
+			try
+			{
+				await Task.Run(() => FsHelpers.DeleteOwnedDirectory(
+					previousPath, operationRoot, installOwner));
+			}
+			catch (Exception cleanupError)
+			{
+				preserveForRecovery = true;
+				Tools.Instance?.AddError($"Cleared install cleanup is pending: {cleanupError.Message}");
+			}
+		}
+		catch
+		{
+			try
+			{
+				if (Directory.Exists(operationRoot) && FsHelpers.IsOwnedDirectory(operationRoot, operationOwner))
+				{
+					FsHelpers.AtomicWriteText(Path.Join(operationRoot, "phase"), "rollback");
+				}
+				if (filesystemCommitted && Directory.Exists(installPath))
+				{
+					FsHelpers.DeleteOwnedDirectory(installPath, parent, installOwner);
+				}
+				if (Directory.Exists(previousPath) && !Directory.Exists(installPath))
+				{
+					Directory.Move(previousPath, installPath);
+				}
+			}
+			catch
+			{
+				preserveForRecovery = true;
+			}
+
+			settings.InstalledVersion = previousVersion;
+			settings.ExecutablePath = previousExecutable;
+			if (!Globals.Instance.SyncCurrentProviderSettings())
+			{
+				preserveForRecovery = true;
+			}
+			throw;
+		}
+		finally
+		{
+			if (!preserveForRecovery && Directory.Exists(operationRoot) &&
+			    FsHelpers.IsOwnedDirectory(operationRoot, operationOwner))
+			{
+				try
+				{
+					FsHelpers.DeleteOwnedDirectory(operationRoot, parent, operationOwner);
+				}
+				catch (Exception cleanupError)
+				{
+					Tools.Instance?.AddError($"Cleared install journal cleanup failed: {cleanupError.Message}");
+				}
+			}
+		}
 	}
 
 

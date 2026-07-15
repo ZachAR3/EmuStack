@@ -110,7 +110,6 @@ public class ModeEden : Mode
 			?.Select(link => new EdenAssetLink
 			{
 				Url = link.GetAttributeValue("href", ""),
-				Text = HtmlEntity.DeEntitize(link.InnerText).Trim()
 			})
 			.Where(link => IsOfficialAssetUrl(link.Url) && IsInstallableAsset(link.FileName))
 			.ToList() ?? new List<EdenAssetLink>();
@@ -265,7 +264,6 @@ public class ModeEden : Mode
 	private class EdenAssetLink
 	{
 		public string Url { get; init; } = "";
-		public string Text { get; init; } = "";
 
 		public string FileName
 		{

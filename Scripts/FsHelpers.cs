@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading;
 
 
 public static class FsHelpers
@@ -201,8 +202,10 @@ public static class FsHelpers
 		string destinationDir,
 		bool preserveDestinationFiles,
 		string requiredSourceOwner = null,
-		string requiredDestinationOwner = null)
+		string requiredDestinationOwner = null,
+		CancellationToken cancellationToken = default)
 	{
+		cancellationToken.ThrowIfCancellationRequested();
 		if (!Directory.Exists(sourceDir))
 		{
 			throw new DirectoryNotFoundException($"Source directory does not exist: {sourceDir}");
@@ -257,9 +260,10 @@ public static class FsHelpers
 			if (preserveDestinationFiles && Directory.Exists(destination))
 			{
 				EnsureNoReparsePoints(destination);
-				CopyDirectory(destination, staged, true);
+				CopyDirectory(destination, staged, true, cancellationToken);
 			}
-			CopyDirectory(source, staged, true);
+			CopyDirectory(source, staged, true, cancellationToken);
+			cancellationToken.ThrowIfCancellationRequested();
 			var copiedMarker = Path.Join(staged, OwnerMarkerFileName);
 			if (File.Exists(copiedMarker))
 			{
@@ -471,6 +475,14 @@ public static class FsHelpers
 				}
 				Directory.Move(destination, Path.Join(operationRoot, "recovery-destination"));
 			}
+			else if (phase == "staging" && temporaryDestinationMarker && Directory.Exists(destination) &&
+			         !string.IsNullOrEmpty(destinationOwner) && IsOwnedDirectory(destination, destinationOwner))
+			{
+				// A destination that did not exist before the operation can be moved into
+				// place before the phase write reaches disk. Its operation-specific marker
+				// distinguishes it from a pre-existing user directory, so roll it back.
+				Directory.Move(destination, Path.Join(operationRoot, "recovery-destination"));
+			}
 			else if (phase is not ("staging" or "swapping" or "rollback" or "state-committed"))
 			{
 				throw new InvalidDataException($"Unknown copy recovery phase: {phase}");
@@ -562,21 +574,37 @@ public static class FsHelpers
 		: StringComparison.Ordinal;
 
 
-	private static void CopyDirectory(string source, string destination, bool overwriteFiles)
+	private static void CopyDirectory(
+		string source,
+		string destination,
+		bool overwriteFiles,
+		CancellationToken cancellationToken)
 	{
 		foreach (var directory in Directory.GetDirectories(source, "*", SearchOption.TopDirectoryOnly))
 		{
+			cancellationToken.ThrowIfCancellationRequested();
 			RejectReparsePoint(directory);
 			var target = Path.Join(destination, Path.GetFileName(directory));
 			Directory.CreateDirectory(target);
-			CopyDirectory(directory, target, overwriteFiles);
+			CopyDirectory(directory, target, overwriteFiles, cancellationToken);
 		}
 
 		foreach (var file in Directory.GetFiles(source, "*", SearchOption.TopDirectoryOnly))
 		{
+			cancellationToken.ThrowIfCancellationRequested();
 			RejectReparsePoint(file);
 			File.Copy(file, Path.Join(destination, Path.GetFileName(file)), overwriteFiles);
 		}
+	}
+
+
+	internal static bool ShouldRemoveUncommittedTarget(
+		string phase,
+		bool hadPreviousTarget,
+		bool previousSnapshotExists)
+	{
+		return !hadPreviousTarget && !previousSnapshotExists &&
+			phase is "swapping" or "filesystem-committed" or "rollback";
 	}
 
 

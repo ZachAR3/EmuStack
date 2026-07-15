@@ -146,6 +146,10 @@ public class ModeRyubing : Mode
 		{
 			return null;
 		}
+		catch (JsonException)
+		{
+			return null;
+		}
 		catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
 		{
 			return null;

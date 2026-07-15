@@ -1,4 +1,8 @@
 using System.IO.Compression;
+using System.Net;
+using System.Net.Http;
+using System.Reflection;
+using System.Text.RegularExpressions;
 
 
 var tests = new (string Name, Action Run)[]
@@ -18,8 +22,17 @@ var tests = new (string Name, Action Run)[]
 	("copy transactions recover an interrupted swap", CopyRecovery),
 	("copy recovery rolls back an uncommitted destination", CopyRecoveryRollback),
 	("copy recovery preserves a pre-existing staging destination", CopyRecoveryPreservesStagingDestination),
+	("copy recovery removes a fresh destination before its phase write", CopyRecoveryRemovesFreshStagingDestination),
 	("copy recovery preserves an unowned destination", CopyRecoveryRefusesUnownedDestination),
+	("copy cancellation leaves the existing destination unchanged", CopyCancellation),
+	("swap recovery removes only fresh uncommitted targets", SwapRecoveryDecision),
 	("mod paths use stable identities and ownership markers", ModIdentity),
+	("provider registry preserves legacy aliases", ProviderAliases),
+	("Eden discovery selects the matching official asset", EdenReleaseDiscovery),
+	("Ryubing discovery accepts a direct update-server release", RyubingReleaseDiscovery),
+	("Ryubing discovery falls back on malformed update JSON", RyubingMalformedUpdateResponse),
+	("title parsing skips malformed rows and decodes names", TitleParsing),
+	("scene signal methods remain bound to existing C# methods", SceneSignalContracts),
 	("unsupported operating systems fail explicitly", UnsupportedOs),
 	("custom provider versions reject path syntax", CustomVersionValidation),
 };
@@ -318,6 +331,66 @@ static void CopyRecoveryPreservesStagingDestination()
 }
 
 
+static void CopyRecoveryRemovesFreshStagingDestination()
+{
+	using var fixture = new Fixture();
+	var destination = Path.Join(fixture.Root, "destination");
+	var operationRoot = Path.Join(fixture.Root, ".destination-copy-crashed");
+	Directory.CreateDirectory(destination);
+	File.WriteAllText(Path.Join(destination, "new.txt"), "new");
+	FsHelpers.MarkOwnedDirectory(destination, "copy-destination:test");
+	FsHelpers.MarkOwnedDirectory(operationRoot, "copy-operation:test");
+	FsHelpers.AtomicWriteText(Path.Join(operationRoot, "destination.path"), destination);
+	FsHelpers.AtomicWriteText(Path.Join(operationRoot, "destination.owner"), "copy-destination:test");
+	FsHelpers.AtomicWriteText(Path.Join(operationRoot, "destination.marker-temporary"), "true");
+	FsHelpers.AtomicWriteText(Path.Join(operationRoot, "phase"), "staging");
+
+	FsHelpers.RecoverTransactionalCopy(destination);
+	Assert(!Directory.Exists(destination), "fresh uncommitted destination was retained");
+	Assert(!Directory.Exists(operationRoot), "fresh-destination recovery left an operation directory");
+}
+
+
+static void CopyCancellation()
+{
+	using var fixture = new Fixture();
+	var source = Path.Join(fixture.Root, "source");
+	var destination = Path.Join(fixture.Root, "destination");
+	Directory.CreateDirectory(source);
+	Directory.CreateDirectory(destination);
+	File.WriteAllText(Path.Join(source, "new.txt"), "new");
+	File.WriteAllText(Path.Join(destination, "existing.txt"), "keep");
+	using var cancellation = new CancellationTokenSource();
+	cancellation.Cancel();
+
+	AssertThrows<OperationCanceledException>(() => FsHelpers.TransactionalCopyDirectory(
+		source,
+		destination,
+		preserveDestinationFiles: true,
+		cancellationToken: cancellation.Token));
+	Assert(File.ReadAllText(Path.Join(destination, "existing.txt")) == "keep", "canceled copy changed the destination");
+	Assert(!File.Exists(Path.Join(destination, "new.txt")), "canceled copy committed source data");
+}
+
+
+static void SwapRecoveryDecision()
+{
+	foreach (var phase in new[] { "swapping", "filesystem-committed", "rollback" })
+	{
+		Assert(FsHelpers.ShouldRemoveUncommittedTarget(phase, false, false),
+			$"fresh target should be removed during {phase}");
+		Assert(!FsHelpers.ShouldRemoveUncommittedTarget(phase, true, false),
+			$"previous target should be preserved during {phase}");
+		Assert(!FsHelpers.ShouldRemoveUncommittedTarget(phase, false, true),
+			$"target with a previous snapshot should be recovered from the snapshot during {phase}");
+	}
+	Assert(!FsHelpers.ShouldRemoveUncommittedTarget("staging", false, false),
+		"staging should not remove a target before a swap begins");
+	Assert(!FsHelpers.ShouldRemoveUncommittedTarget("state-committed", false, false),
+		"committed target should not be removed");
+}
+
+
 static void ModIdentity()
 {
 	using var fixture = new Fixture();
@@ -332,6 +405,118 @@ static void ModIdentity()
 	Assert(ModPaths.IsManaged(firstPath), "ownership marker was not recognized");
 	var linkedLocal = new Mod { StableId = "local-keep", ModId = "remote-id", ModName = "Local" };
 	Assert(ModPaths.StableId(linkedLocal) == "local-keep", "linking a local mod changed its on-disk identity");
+}
+
+
+static void ProviderAliases()
+{
+	var registry = new ProviderRegistry();
+	Assert(registry.NormalizeProviderId("Yuzu") == "eden", "Yuzu alias did not migrate to Eden");
+	Assert(registry.NormalizeProviderId("Ryujinx") == "ryubing", "Ryujinx alias did not migrate to Ryubing");
+	Assert(registry.Get("unknown").Id == registry.DefaultProvider.Id, "unknown provider did not use the default");
+}
+
+
+static void EdenReleaseDiscovery()
+{
+	const string releaseHtml = """
+		<html><body>
+		<a href="https://stable.eden-emu.dev/eden-v0.2.0-windows-amd64-msvc-standard.zip">Windows</a>
+		<a href="https://stable.eden-emu.dev/eden-v0.2.0-linux-amd64-clang-pgo.AppImage">Linux</a>
+		</body></html>
+		""";
+	using var client = new HttpClient(new StubHttpMessageHandler(request =>
+		new HttpResponseMessage(HttpStatusCode.OK)
+		{
+			Content = new StringContent(request.RequestUri?.Query.Contains("page=", StringComparison.Ordinal) == true
+				? "<html></html>"
+				: releaseHtml),
+		}));
+	var releases = new ModeEden().GetAvailableReleases(client, OsKind.Windows, "stable")
+		.GetAwaiter().GetResult();
+
+	Assert(releases.Count == 1, "Eden discovery did not group assets by version");
+	Assert(releases[0].Version == "0.2.0", "Eden discovery returned the wrong version");
+	Assert(releases[0].FileName.EndsWith("windows-amd64-msvc-standard.zip", StringComparison.Ordinal),
+		"Eden discovery selected the wrong platform asset");
+}
+
+
+static void RyubingReleaseDiscovery()
+{
+	using var client = new HttpClient(new StubHttpMessageHandler(_ =>
+		new HttpResponseMessage(HttpStatusCode.OK)
+		{
+			Content = new StringContent(
+				"{\"tag\":\"v1.2.3\",\"download_url\":\"https://downloads.example/Ryubing.AppImage\"}"),
+		}));
+	var releases = new ModeRyubing().GetAvailableReleases(client, OsKind.Linux, "stable")
+		.GetAwaiter().GetResult();
+
+	Assert(releases.Count == 1, "Ryubing update-server release was not returned");
+	Assert(releases[0].Version == "1.2.3", "Ryubing release version was not normalized");
+	Assert(releases[0].FileName == "Ryubing.AppImage", "Ryubing download filename was not parsed");
+}
+
+
+static void RyubingMalformedUpdateResponse()
+{
+	using var client = new HttpClient(new StubHttpMessageHandler(request =>
+		new HttpResponseMessage(HttpStatusCode.OK)
+		{
+			Content = new StringContent(request.RequestUri?.Host == "update.ryujinx.app" ? "{invalid" : "[]"),
+		}));
+	var releases = new ModeRyubing().GetAvailableReleases(client, OsKind.Linux, "stable")
+		.GetAwaiter().GetResult();
+
+	Assert(releases.Count == 0, "malformed update JSON did not fall back to the empty Forgejo response");
+}
+
+
+static void TitleParsing()
+{
+	const string html = """
+		<table>
+		<tr><th>Title ID</th><th>Name</th></tr>
+		<tr><td>0100F2C0115B6000</td><td><a>Zelda &amp; Friends™</a></td></tr>
+		<tr><td>not-an-id</td><td>Ignore</td></tr>
+		<tr><td>010012101468C000</td></tr>
+		</table>
+		""";
+	var titles = ModManager.ParseTitles(html);
+
+	Assert(titles.Count == 1, "malformed title rows were not skipped");
+	Assert(titles["0100F2C0115B6000"] == "Zelda & Friends", "title name was not decoded and normalized");
+}
+
+
+static void SceneSignalContracts()
+{
+	var repositoryRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+	AssertSceneTargetMethods(repositoryRoot, "Scenes/Home.tscn", ".", typeof(Home));
+	AssertSceneTargetMethods(repositoryRoot, "Scenes/Home.tscn", "ToolsService", typeof(Tools));
+	AssertSceneTargetMethods(repositoryRoot, "Scenes/InstallerPage.tscn", ".", typeof(Installer));
+	AssertSceneTargetMethods(repositoryRoot, "Scenes/ModManagerPage.tscn", ".", typeof(ModManager));
+	AssertSceneTargetMethods(repositoryRoot, "Scenes/SettingsPage.tscn", ".", typeof(SettingsPage));
+	AssertSceneTargetMethods(repositoryRoot, "Scenes/ToolsPage.tscn", ".", typeof(ToolsPage));
+}
+
+
+static void AssertSceneTargetMethods(string repositoryRoot, string relativeScenePath, string target, Type scriptType)
+{
+	var scene = File.ReadAllText(Path.Join(repositoryRoot, relativeScenePath));
+	var matches = Regex.Matches(
+		scene,
+		$@"\[connection[^\]]+to=""{Regex.Escape(target)}"" method=""([^""]+)""");
+	Assert(matches.Count > 0, $"no signal connections found for {relativeScenePath} target {target}");
+	foreach (Match match in matches)
+	{
+		var methodName = match.Groups[1].Value;
+		var methodExists = scriptType
+			.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+			.Any(method => method.Name == methodName);
+		Assert(methodExists, $"{relativeScenePath} targets missing method {scriptType.Name}.{methodName}");
+	}
 }
 
 
@@ -402,5 +587,24 @@ sealed class Fixture : IDisposable
 		{
 			Directory.Delete(Root, true);
 		}
+	}
+}
+
+
+sealed class StubHttpMessageHandler : HttpMessageHandler
+{
+	private readonly Func<HttpRequestMessage, HttpResponseMessage> _responseFactory;
+
+	public StubHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> responseFactory)
+	{
+		_responseFactory = responseFactory;
+	}
+
+	protected override Task<HttpResponseMessage> SendAsync(
+		HttpRequestMessage request,
+		CancellationToken cancellationToken)
+	{
+		cancellationToken.ThrowIfCancellationRequested();
+		return Task.FromResult(_responseFactory(request));
 	}
 }

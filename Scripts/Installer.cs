@@ -481,6 +481,11 @@ public partial class Installer : Control
 		FsHelpers.AtomicWriteText(Path.Join(_operationRoot, "owner"), InstallOwnerId);
 		FsHelpers.AtomicWriteText(Path.Join(_operationRoot, "previous.version"), ProviderSettings.InstalledVersion ?? "");
 		FsHelpers.AtomicWriteText(Path.Join(_operationRoot, "previous.executable"), ProviderSettings.ExecutablePath ?? "");
+		FsHelpers.AtomicWriteText(
+			Path.Join(_operationRoot, "previous.present"),
+			Directory.Exists(installPath) && Directory.EnumerateFileSystemEntries(installPath).Any()
+				? "true"
+				: "false");
 		FsHelpers.AtomicWriteText(Path.Join(_operationRoot, "phase"), "staging");
 		_downloadPath = Path.Join(_operationRoot, "download.part");
 		FsHelpers.EnsureNoReparsePoints(_downloadPath);
@@ -742,6 +747,16 @@ public partial class Installer : Control
 				}
 				var previousVersion = File.ReadAllText(Path.Join(operationRoot, "previous.version")).Trim();
 				var previousExecutable = File.ReadAllText(Path.Join(operationRoot, "previous.executable")).Trim();
+				bool? previousPresent = null;
+				var previousPresentPath = Path.Join(operationRoot, "previous.present");
+				if (File.Exists(previousPresentPath))
+				{
+					if (!bool.TryParse(File.ReadAllText(previousPresentPath).Trim(), out var parsedPreviousPresent))
+					{
+						throw new InvalidDataException("Installer recovery journal has an invalid previous-target flag.");
+					}
+					previousPresent = parsedPreviousPresent;
+				}
 				if (!string.IsNullOrWhiteSpace(previousExecutable))
 				{
 					previousExecutable = FsHelpers.CanonicalPath(previousExecutable);
@@ -784,10 +799,22 @@ public partial class Installer : Control
 						}
 					}
 				}
-				else if (Directory.Exists(installPath) && phase == "filesystem-committed" &&
-				         FsHelpers.IsOwnedDirectory(installPath, InstallOwnerId))
+				else if (!commitConfirmed && Directory.Exists(installPath))
 				{
-					FsHelpers.DeleteOwnedDirectory(installPath, parent, InstallOwnerId);
+					if (previousPresent == false && FsHelpers.ShouldRemoveUncommittedTarget(
+						phase, hadPreviousTarget: false, previousSnapshotExists: false))
+					{
+						if (!FsHelpers.IsOwnedDirectory(installPath, InstallOwnerId))
+						{
+							throw new IOException("Interrupted install recovery found an unowned new directory.");
+						}
+						FsHelpers.DeleteOwnedDirectory(installPath, parent, InstallOwnerId);
+					}
+					else if ((previousPresent == null && phase is "swapping" or "filesystem-committed" or "rollback") ||
+					         (previousPresent == true && phase == "filesystem-committed"))
+					{
+						throw new IOException("Interrupted install recovery cannot distinguish the current directory from the missing previous snapshot.");
+					}
 				}
 
 				if (!commitConfirmed)
